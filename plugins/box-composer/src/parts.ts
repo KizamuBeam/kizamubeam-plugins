@@ -282,20 +282,47 @@ const X: V3 = [1, 0, 0],
 const neg = (a: V3): V3 => [-a[0], -a[1], -a[2]];
 
 /**
+ * Outer parts lie outer face up on the work area (#463): the face up there (cut and engraved) faces −(u×v). These
+ * are seen from outside only when turned over: their outline mirrored (x → −x) and u negated, the solid stays.
+ */
+export const TURNED_OVER = ['floor', 'back', 'right'];
+
+/** Subpath mirrored at the y axis; the nodes run backwards (closed ones from the same first node), same sense of rotation */
+export function mirrorX(sp: SubPath): SubPath {
+  const f = (p: { x: number; y: number }) => ({ x: -p.x, y: p.y });
+  const ns = !sp.closed ? [...sp.nodes].reverse() : sp.nodes.length ? [sp.nodes[0], ...sp.nodes.slice(1).reverse()] : [];
+  return {
+    ...sp,
+    nodes: ns.map((n) => {
+      const { cin, cout, ...rest } = n;
+      return { ...rest, ...f(n), ...(cout ? { cin: f(cout) } : {}), ...(cin ? { cout: f(cin) } : {}) };
+    }),
+  };
+}
+
+/** The given parts turned over (see TURNED_OVER) */
+export function turnOver(parts: Parts, keys: string[]): Parts {
+  const out: Parts = { ...parts };
+  for (const k of keys) if (out[k]) out[k] = out[k].map(mirrorX);
+  return out;
+}
+
+/**
  * Where every part sits in the 3D view (X right, Y back, Z up; a point (x, y) of a part at height s lies at
  * o + x·u + y·v + s·n). The plan is seen from above with the front at the bottom: inner x → X = t + x,
- * inner y → Y = D − t − y. Outer walls, floor and lid as in the box generator.
+ * inner y → Y = D − t − y. Outer walls, floor and lid outer face up (legacy: as saved before #463).
  */
-export function poses(walls: WallPanel[], d: Dims, keys: string[]): Record<string, Pose> {
+export function poses(walls: WallPanel[], d: Dims, keys: string[], legacy = false): Record<string, Pose> {
   const { W, D, H, t } = d;
   const down = neg(Z);
+  const turn = (k: string, a: V3) => (!legacy && TURNED_OVER.includes(k) ? neg(a) : a);
   const all: Record<string, Pose> = {
-    floor: { o: [W / 2, D / 2, 0], u: X, v: neg(Y), n: Z },
+    floor: { o: [W / 2, D / 2, 0], u: turn('floor', X), v: neg(Y), n: Z },
     lid: { o: [W / 2, D / 2, H - t], u: X, v: neg(Y), n: Z },
     front: { o: [W / 2, 0, H / 2], u: X, v: down, n: Y },
-    back: { o: [W / 2, D - t, H / 2], u: X, v: down, n: Y },
+    back: { o: [W / 2, D - t, H / 2], u: turn('back', X), v: down, n: Y },
     left: { o: [0, D / 2, H / 2], u: neg(Y), v: down, n: X },
-    right: { o: [W - t, D / 2, H / 2], u: neg(Y), v: down, n: X },
+    right: { o: [W - t, D / 2, H / 2], u: turn('right', neg(Y)), v: down, n: X },
   };
   for (const p of walls) {
     const w = p.it.wall,

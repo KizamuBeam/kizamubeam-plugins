@@ -9,7 +9,7 @@ import { JointError } from './joints';
 import { current, keepWalls } from './edit';
 import { buildModel, EPS, mergeWalls, readLayout, scaleLayout, unify, writeLayout, type Layout, type Limits, type Model, type Side, type Wall } from './model';
 import { bbox, isRect } from './outline';
-import { buildParts, floorSpans, innerHeight, poses, withKerf, type Dims } from './parts';
+import { boardTurned, buildParts, floorSpans, innerHeight, poses, turnOver, TURNED_OVER, withKerf, type Dims } from './parts';
 import { planDraw, planPointer, selectedId, type Plan } from './surface';
 
 interface P {
@@ -30,6 +30,8 @@ interface P {
   finger: number;
   walls: string;
   wallsRef: string;
+  /** 'legacy': saved before #463, floor, back, right and some boards of a shaped outline inner face up */
+  faces: string;
 }
 
 const sidesOf = (p: P): Record<Side, boolean> => ({ x0: p.wallLeft, x1: p.wallRight, y0: p.wallBack, y1: p.wallFront });
@@ -269,6 +271,10 @@ function sideToggled(side: Side, p: P) {
 }
 
 definePlugin<P>({
+  // 2 (#463): saved boxes keep floor, back, right and the boards of a shaped outline as they were (inner face up)
+  migrate({ params, from }) {
+    return from < 2 ? { ...params, faces: 'legacy' } : params;
+  },
   // "From material" switched on: take over thickness, kerf and play of the layer's material (those it has)
   onChange({ key, old, params }) {
     if (key === 'width' || key === 'depth') return resized(key, old, params);
@@ -301,7 +307,9 @@ definePlugin<P>({
   generate(p) {
     const c = compute(p);
     if (!c.built || !c.box || !c.d) throw new Error(c.issues.find((i) => i.level === 'error')?.code ?? 'walls-bad');
-    const parts = withKerf(c.built.parts, c.d.kerf);
+    const legacy = p.faces === 'legacy';
+    const kerfed = withKerf(c.built.parts, c.d.kerf);
+    const parts = legacy ? kerfed : turnOver(kerfed, [...TURNED_OVER, ...c.built.boards.filter(boardTurned).map((b) => b.key)]);
     const keys = Object.keys(parts);
     const at = host.nest({ parts: keys.map((key) => ({ key, subs: parts[key] })), gap: Math.max(3, 2 * c.d.kerf + 2) });
     const out: Part[] = keys.map((key, i) => ({ key, subs: parts[key], at: { x: at[i][0], y: at[i][1] } }));
@@ -316,6 +324,6 @@ definePlugin<P>({
     if (c.material) info.push(['info.material', `${c.material} · ${mm(c.d.t)} mm`]);
     // Larger than the work area as one block: the app spreads the parts over pages (#387), not turned (grain)
     const spread = fitsArea(out) ? {} : { distribute: { rotate: false } };
-    return { parts: out, info, labels, poses: { poses: poses(c.built.walls, c.d, keys, c.built.boards) }, ...spread };
+    return { parts: out, info, labels, poses: { poses: poses(c.built.walls, c.d, keys, c.built.boards, legacy) }, ...spread };
   },
 });

@@ -6,7 +6,7 @@ import { definePlugin, host, mm, type Drawing, type Issue, type Part, type SubPa
 import { JointError } from './joints';
 import { current, keepWalls } from './edit';
 import { buildModel, readLayout, scaleLayout, writeLayout, type Limits, type Model } from './model';
-import { buildParts, floorSpans, innerHeight, poses, wallKey, withKerf, type Dims } from './parts';
+import { buildParts, floorSpans, innerHeight, poses, turnOver, TURNED_OVER, wallKey, withKerf, type Dims } from './parts';
 import { planDraw, planPointer, selectedId, type Plan } from './surface';
 
 interface P {
@@ -27,6 +27,8 @@ interface P {
   finger: number;
   walls: string;
   wallsRef: string;
+  /** 'legacy': saved before #463, floor, back and right inner face up */
+  faces: string;
 }
 
 /** Values of the layer's material for the fields; slotPlay (slot width over the thickness) is the total play of a
@@ -189,6 +191,10 @@ function highlight(p: P, id: number | undefined): NonNullable<Drawing['highlight
 }
 
 definePlugin<P>({
+  // 2 (#463): saved boxes keep floor, back and right as they were (inner face up)
+  migrate({ params, from }) {
+    return from < 2 ? { ...params, faces: 'legacy' } : params;
+  },
   // "From material" switched on: take over thickness, kerf and play of the layer's material (those it has)
   onChange({ key, old, params }) {
     if (key === 'width' || key === 'depth') return resized(key, old, params);
@@ -220,7 +226,9 @@ definePlugin<P>({
   generate(p) {
     const c = compute(p);
     if (!c.built || !c.d) throw new Error(c.issues.find((i) => i.level === 'error')?.code ?? 'walls-bad');
-    const parts = withKerf(c.built.parts, c.d.kerf);
+    const legacy = p.faces === 'legacy';
+    const kerfed = withKerf(c.built.parts, c.d.kerf);
+    const parts = legacy ? kerfed : turnOver(kerfed, TURNED_OVER);
     const keys = Object.keys(parts);
     const at = host.nest({ parts: keys.map((key) => ({ key, subs: parts[key] })), gap: Math.max(3, 2 * c.d.kerf + 2) });
     const out: Part[] = keys.map((key, i) => ({ key, subs: parts[key], at: { x: at[i][0], y: at[i][1] } }));
@@ -233,6 +241,6 @@ definePlugin<P>({
     if (c.material) info.push(['info.material', `${c.material} · ${mm(c.d.t)} mm`]);
     // Larger than the work area as one block: the app spreads the parts over pages (#387), not turned (grain)
     const spread = fitsArea(out) ? {} : { distribute: { rotate: false } };
-    return { parts: out, info, labels, poses: { poses: poses(c.built.walls, c.d, keys) }, ...spread };
+    return { parts: out, info, labels, poses: { poses: poses(c.built.walls, c.d, keys, legacy) }, ...spread };
   },
 });
