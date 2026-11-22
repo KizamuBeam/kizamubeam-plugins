@@ -1,0 +1,1014 @@
+{
+  "format": "kizamubeam-pack",
+  "formatVersion": 2,
+  "id": "org.kizamubeam.clock-generator",
+  "version": "1.0.0",
+  "name": {
+    "en": "Analog clock generator",
+    "de": "Uhren-Generator (Analog)",
+    "it": "Generatore di orologi analogici"
+  },
+  "description": {
+    "en": "Parametric analog clocks in 10 shapes with optional backplate, stackable spacer rings, engraved or cut-out numerals with automatic stencil bridges, 6 selectable fonts, customisable tick marks and 8 hand styles.",
+    "de": "Parametrische analoge Uhren in 10 Formen mit optionaler Grundplatte, stapelbaren Abstandsringen, gravierten oder ausgeschnittenen Ziffern mit automatischen Stegen, 6 wählbaren Schriftarten, einstellbaren Markierungen und 8 Zeigerformen.",
+    "it": "Orologi analogici parametrici in 10 forme con piastra di fondo opzionale, anelli distanziatori impilabili, cifre incise o ritagliate con ponticelli automatici, 6 caratteri, tacche configurabili e 8 stili di lancette."
+  },
+  "author": "KizamuBeam",
+  "homepage": "https://github.com/KizamuBeam/kizamubeam-plugins/tree/main/plugins/clock-generator",
+  "build": [
+    {
+      "esbuild": "src/index.ts",
+      "out": "dist/clock-generator.js"
+    }
+  ],
+  "plugins": [
+    {
+      "id": "org.kizamubeam.clock-generator",
+      "type": "generator",
+      "api": 1,
+      "version": 1,
+      "kind": "assembly",
+      "runtime": "js",
+      "code": "@dist/clock-generator.js",
+      "icon": "pulley",
+      "host": [
+        "boolean",
+        "nest"
+      ],
+      "preview": {
+        "center": true
+      },
+      "dialog": {
+        "version": 5,
+        "steps": [
+          {
+            "id": "body",
+            "label": "step.body",
+            "items": [
+              "shape",
+              "diameter",
+              "width",
+              "height",
+              "cornerRadius",
+              "thickness",
+              "shaftDia"
+            ]
+          },
+          {
+            "id": "layers",
+            "label": "step.layers",
+            "items": [
+              "backplate",
+              "backplateCenter",
+              "movementSize",
+              "hangerHole",
+              "ringCount",
+              "ringWidth",
+              "glueMarks"
+            ]
+          },
+          {
+            "id": "dial",
+            "label": "step.dial",
+            "items": [
+              "dialStyle",
+              "numeralMode",
+              "font",
+              "numeralSize",
+              "numeralRadiusPct",
+              "rotateNumerals",
+              "bridgeWidth",
+              "bridgeCount",
+              "bridgeDirection",
+              "skeletonSpokes",
+              "skeletonHubDia"
+            ]
+          },
+          {
+            "id": "ticks",
+            "label": "step.ticks",
+            "items": [
+              "tickMode",
+              "tickStyle",
+              "tickInset",
+              "hourTickLength",
+              "hourTickWidth",
+              "minuteTickLength",
+              "minuteTickWidth",
+              "quarterAccent",
+              "chapterRing"
+            ]
+          },
+          {
+            "id": "hands",
+            "label": "step.hands",
+            "items": [
+              "includeHands",
+              "handStyle",
+              "includeSecondHand",
+              "handWidth",
+              "hourHandPct",
+              "minuteHandPct",
+              "hourHoleDia",
+              "minuteHoleDia",
+              "secondHoleDia"
+            ]
+          }
+        ]
+      },
+      "params": [
+        {
+          "key": "shape",
+          "type": "enum",
+          "options": [
+            ["circle", "shape.circle"],
+            ["square", "shape.square"],
+            ["rectangle", "shape.rectangle"],
+            ["oval", "shape.oval"],
+            ["octagon", "shape.octagon"],
+            ["hexagon", "shape.hexagon"],
+            ["dodecagon", "shape.dodecagon"],
+            ["arch", "shape.arch"],
+            ["squircle", "shape.squircle"],
+            ["scalloped", "shape.scalloped"]
+          ],
+          "def": "circle"
+        },
+        {
+          "key": "diameter",
+          "type": "length",
+          "min": 60,
+          "max": 1000,
+          "def": 240,
+          "showIf": {
+            "in": ["shape", ["circle", "square", "octagon", "hexagon", "dodecagon", "squircle", "scalloped"]]
+          }
+        },
+        {
+          "key": "width",
+          "type": "length",
+          "min": 60,
+          "max": 1000,
+          "def": 220,
+          "showIf": {
+            "in": ["shape", ["rectangle", "oval", "arch"]]
+          }
+        },
+        {
+          "key": "height",
+          "type": "length",
+          "min": 60,
+          "max": 1000,
+          "def": 280,
+          "showIf": {
+            "in": ["shape", ["rectangle", "oval", "arch"]]
+          }
+        },
+        {
+          "key": "cornerRadius",
+          "type": "length",
+          "min": 0,
+          "max": 200,
+          "def": 12,
+          "showIf": {
+            "in": ["shape", ["square", "rectangle"]]
+          }
+        },
+        {
+          "key": "thickness",
+          "type": "length",
+          "min": 0.5,
+          "max": 20,
+          "def": 3
+        },
+        {
+          "key": "shaftDia",
+          "type": "length",
+          "min": 2,
+          "max": 30,
+          "def": 8
+        },
+        {
+          "key": "backplate",
+          "type": "bool",
+          "def": true
+        },
+        {
+          "key": "backplateCenter",
+          "type": "enum",
+          "options": [
+            ["none", "backplateCenter.none"],
+            ["shaft", "backplateCenter.shaft"],
+            ["movement", "backplateCenter.movement"]
+          ],
+          "def": "movement",
+          "showIf": { "eq": ["backplate", true] }
+        },
+        {
+          "key": "movementSize",
+          "type": "length",
+          "min": 20,
+          "max": 120,
+          "def": 56,
+          "showIf": {
+            "and": [
+              { "eq": ["backplate", true] },
+              { "eq": ["backplateCenter", "movement"] }
+            ]
+          }
+        },
+        {
+          "key": "hangerHole",
+          "type": "bool",
+          "def": true,
+          "showIf": { "eq": ["backplate", true] }
+        },
+        {
+          "key": "ringCount",
+          "type": "int",
+          "min": 0,
+          "max": 10,
+          "def": 1
+        },
+        {
+          "key": "ringWidth",
+          "type": "length",
+          "min": 4,
+          "max": 100,
+          "def": 18,
+          "showIf": { "gt": ["ringCount", 0] }
+        },
+        {
+          "key": "glueMarks",
+          "type": "bool",
+          "def": false,
+          "showIf": {
+            "or": [
+              { "eq": ["backplate", true] },
+              { "gt": ["ringCount", 0] }
+            ]
+          }
+        },
+        {
+          "key": "dialStyle",
+          "type": "enum",
+          "options": [
+            ["classic", "dialStyle.classic"],
+            ["quarters", "dialStyle.quarters"],
+            ["roman", "dialStyle.roman"],
+            ["romanQuarters", "dialStyle.romanQuarters"],
+            ["minimal", "dialStyle.minimal"],
+            ["station", "dialStyle.station"],
+            ["skeleton", "dialStyle.skeleton"]
+          ],
+          "def": "classic"
+        },
+        {
+          "key": "numeralMode",
+          "type": "enum",
+          "options": [
+            ["engrave", "numeralMode.engrave"],
+            ["engraveStroke", "numeralMode.engraveStroke"],
+            ["cutout", "numeralMode.cutout"]
+          ],
+          "def": "engrave",
+          "showIf": {
+            "in": ["dialStyle", ["classic", "quarters", "roman", "romanQuarters", "skeleton"]]
+          }
+        },
+        {
+          "key": "font",
+          "type": "enum",
+          "options": [
+            ["sans", "font.sans"],
+            ["serif", "font.serif"],
+            ["rounded", "font.rounded"],
+            ["artdeco", "font.artdeco"],
+            ["slab", "font.slab"],
+            ["technical", "font.technical"]
+          ],
+          "def": "sans",
+          "showIf": {
+            "and": [
+              { "in": ["dialStyle", ["classic", "quarters", "roman", "romanQuarters", "skeleton"]] },
+              { "ne": ["numeralMode", "engraveStroke"] }
+            ]
+          }
+        },
+        {
+          "key": "numeralSize",
+          "type": "length",
+          "min": 6,
+          "max": 120,
+          "def": 22,
+          "showIf": {
+            "in": ["dialStyle", ["classic", "quarters", "roman", "romanQuarters", "skeleton"]]
+          }
+        },
+        {
+          "key": "numeralRadiusPct",
+          "type": "number",
+          "min": 35,
+          "max": 90,
+          "def": 70,
+          "showIf": {
+            "in": ["dialStyle", ["classic", "quarters", "roman", "romanQuarters", "skeleton"]]
+          }
+        },
+        {
+          "key": "rotateNumerals",
+          "type": "bool",
+          "def": false,
+          "showIf": {
+            "in": ["dialStyle", ["classic", "quarters", "roman", "romanQuarters", "skeleton"]]
+          }
+        },
+        {
+          "key": "bridgeWidth",
+          "type": "length",
+          "min": 0.6,
+          "max": 8,
+          "def": 2,
+          "showIf": {
+            "and": [
+              { "in": ["dialStyle", ["classic", "quarters", "roman", "romanQuarters", "skeleton"]] },
+              { "eq": ["numeralMode", "cutout"] }
+            ]
+          }
+        },
+        {
+          "key": "bridgeCount",
+          "type": "enum",
+          "options": [
+            ["auto", "bridgeCount.auto"],
+            ["1", "bridgeCount.1"],
+            ["2", "bridgeCount.2"]
+          ],
+          "def": "auto",
+          "showIf": {
+            "and": [
+              { "in": ["dialStyle", ["classic", "quarters", "roman", "romanQuarters", "skeleton"]] },
+              { "eq": ["numeralMode", "cutout"] }
+            ]
+          }
+        },
+        {
+          "key": "bridgeDirection",
+          "type": "enum",
+          "options": [
+            ["shortest", "bridgeDirection.shortest"],
+            ["vertical", "bridgeDirection.vertical"],
+            ["horizontal", "bridgeDirection.horizontal"]
+          ],
+          "def": "shortest",
+          "showIf": {
+            "and": [
+              { "in": ["dialStyle", ["classic", "quarters", "roman", "romanQuarters", "skeleton"]] },
+              { "eq": ["numeralMode", "cutout"] }
+            ]
+          }
+        },
+        {
+          "key": "skeletonSpokes",
+          "type": "int",
+          "min": 3,
+          "max": 12,
+          "def": 6,
+          "showIf": { "eq": ["dialStyle", "skeleton"] }
+        },
+        {
+          "key": "skeletonHubDia",
+          "type": "length",
+          "min": 16,
+          "max": 150,
+          "def": 36,
+          "showIf": { "eq": ["dialStyle", "skeleton"] }
+        },
+        {
+          "key": "tickMode",
+          "type": "enum",
+          "options": [
+            ["hoursAndMinutes", "tickMode.hoursAndMinutes"],
+            ["hours", "tickMode.hours"],
+            ["quarters", "tickMode.quarters"],
+            ["minutesOnly", "tickMode.minutesOnly"],
+            ["none", "tickMode.none"]
+          ],
+          "def": "hoursAndMinutes"
+        },
+        {
+          "key": "tickStyle",
+          "type": "enum",
+          "options": [
+            ["line", "tickStyle.line"],
+            ["bar", "tickStyle.bar"],
+            ["taper", "tickStyle.taper"],
+            ["dot", "tickStyle.dot"],
+            ["cutout", "tickStyle.cutout"]
+          ],
+          "def": "bar",
+          "showIf": { "ne": ["tickMode", "none"] }
+        },
+        {
+          "key": "tickInset",
+          "type": "length",
+          "min": 2,
+          "max": 80,
+          "def": 8,
+          "showIf": { "ne": ["tickMode", "none"] }
+        },
+        {
+          "key": "hourTickLength",
+          "type": "length",
+          "min": 2,
+          "max": 60,
+          "def": 10,
+          "showIf": { "ne": ["tickMode", "none"] }
+        },
+        {
+          "key": "hourTickWidth",
+          "type": "length",
+          "min": 0.5,
+          "max": 20,
+          "def": 2.5,
+          "showIf": {
+            "and": [
+              { "ne": ["tickMode", "none"] },
+              { "ne": ["tickStyle", "line"] }
+            ]
+          }
+        },
+        {
+          "key": "minuteTickLength",
+          "type": "length",
+          "min": 1,
+          "max": 40,
+          "def": 5,
+          "showIf": { "in": ["tickMode", ["hoursAndMinutes", "minutesOnly"]] }
+        },
+        {
+          "key": "minuteTickWidth",
+          "type": "length",
+          "min": 0.4,
+          "max": 12,
+          "def": 1.2,
+          "showIf": {
+            "and": [
+              { "in": ["tickMode", ["hoursAndMinutes", "minutesOnly"]] },
+              { "ne": ["tickStyle", "line"] }
+            ]
+          }
+        },
+        {
+          "key": "quarterAccent",
+          "type": "bool",
+          "def": true,
+          "showIf": { "in": ["tickMode", ["hoursAndMinutes", "hours"]] }
+        },
+        {
+          "key": "chapterRing",
+          "type": "enum",
+          "options": [
+            ["none", "chapterRing.none"],
+            ["outer", "chapterRing.outer"],
+            ["inner", "chapterRing.inner"],
+            ["double", "chapterRing.double"]
+          ],
+          "def": "outer"
+        },
+        {
+          "key": "includeHands",
+          "type": "bool",
+          "def": true
+        },
+        {
+          "key": "handStyle",
+          "type": "enum",
+          "options": [
+            ["baton", "handStyle.baton"],
+            ["dauphine", "handStyle.dauphine"],
+            ["spade", "handStyle.spade"],
+            ["breguet", "handStyle.breguet"],
+            ["railway", "handStyle.railway"],
+            ["arrow", "handStyle.arrow"],
+            ["leaf", "handStyle.leaf"],
+            ["cathedral", "handStyle.cathedral"]
+          ],
+          "def": "dauphine",
+          "showIf": { "eq": ["includeHands", true] }
+        },
+        {
+          "key": "includeSecondHand",
+          "type": "bool",
+          "def": false,
+          "showIf": { "eq": ["includeHands", true] }
+        },
+        {
+          "key": "handWidth",
+          "type": "length",
+          "min": 3,
+          "max": 25,
+          "def": 8,
+          "showIf": { "eq": ["includeHands", true] }
+        },
+        {
+          "key": "hourHandPct",
+          "type": "number",
+          "min": 30,
+          "max": 85,
+          "def": 54,
+          "showIf": { "eq": ["includeHands", true] }
+        },
+        {
+          "key": "minuteHandPct",
+          "type": "number",
+          "min": 45,
+          "max": 95,
+          "def": 78,
+          "showIf": { "eq": ["includeHands", true] }
+        },
+        {
+          "key": "hourHoleDia",
+          "type": "length",
+          "min": 1,
+          "max": 15,
+          "def": 5.5,
+          "advanced": true,
+          "showIf": { "eq": ["includeHands", true] }
+        },
+        {
+          "key": "minuteHoleDia",
+          "type": "length",
+          "min": 1,
+          "max": 15,
+          "def": 3.6,
+          "advanced": true,
+          "showIf": { "eq": ["includeHands", true] }
+        },
+        {
+          "key": "secondHoleDia",
+          "type": "length",
+          "min": 0.4,
+          "max": 6,
+          "def": 1,
+          "advanced": true,
+          "showIf": {
+            "and": [
+              { "eq": ["includeHands", true] },
+              { "eq": ["includeSecondHand", true] }
+            ]
+          }
+        }
+      ],
+      "texts": {
+        "en": {
+          "name": "Analog clock",
+          "desc": "Parametric analog clock with optional backplate, spacer rings, engraved or stencil-bridged cut-out numerals, selectable fonts, ticks and hands.",
+          "keys": "clock watch dial analog wall clock numerals hands spacer rings stencil bridges",
+          "label": "Clock ({w} × {h} mm)",
+          "part.backplate": "Backplate",
+          "part.ring": "Spacer ring {n}",
+          "part.dial": "Clock dial",
+          "part.handHour": "Hour hand",
+          "part.handMinute": "Minute hand",
+          "part.handSecond": "Second hand",
+          "step.body": "Shape",
+          "step.layers": "Plates & rings",
+          "step.dial": "Dial & font",
+          "step.ticks": "Ticks",
+          "step.hands": "Hands",
+          "shape": "Clock shape",
+          "shape.circle": "Round (circle)",
+          "shape.square": "Square",
+          "shape.rectangle": "Rectangle",
+          "shape.oval": "Oval (ellipse)",
+          "shape.octagon": "Octagon",
+          "shape.hexagon": "Hexagon",
+          "shape.dodecagon": "Dodecagon (12-sided)",
+          "shape.arch": "Arch (mantle clock)",
+          "shape.squircle": "Cushion (squircle)",
+          "shape.scalloped": "Scalloped (12 lobes)",
+          "diameter": "Diameter / size",
+          "width": "Width",
+          "height": "Height",
+          "cornerRadius": "Corner radius",
+          "thickness": "Material thickness",
+          "thickness.title": "Used for 3D assembly stacking and total depth calculation.",
+          "shaftDia": "Movement shaft hole",
+          "shaftDia.title": "Centre hole diameter in the dial (standard quartz movement shaft is ~7.5–8 mm).",
+          "backplate": "Include backplate",
+          "backplateCenter": "Backplate centre cutout",
+          "backplateCenter.none": "None (solid back)",
+          "backplateCenter.shaft": "Shaft hole",
+          "backplateCenter.movement": "Quartz movement recess",
+          "movementSize": "Movement cutout size",
+          "movementSize.title": "Square opening for the clockwork body (standard quartz movement: 56 × 56 mm).",
+          "hangerHole": "Wall keyhole hanger",
+          "hangerHole.title": "Cuts a keyhole hanging slot near the top of the backplate.",
+          "ringCount": "Spacer rings",
+          "ringCount.title": "Number of glued spacer rings stacked between backplate and dial.",
+          "ringWidth": "Ring width",
+          "glueMarks": "Glue alignment marks",
+          "glueMarks.title": "Engraves the ring outline and layer labels to make gluing alignment easier.",
+          "dialStyle": "Dial style",
+          "dialStyle.classic": "Classic (1–12)",
+          "dialStyle.quarters": "Quarter hours (12, 3, 6, 9)",
+          "dialStyle.roman": "Roman (I–XII)",
+          "dialStyle.romanQuarters": "Roman quarters (XII, III, VI, IX)",
+          "dialStyle.minimal": "Minimalist (ticks only)",
+          "dialStyle.station": "Station clock (bold bars)",
+          "dialStyle.skeleton": "Skeleton (openwork spokes)",
+          "numeralMode": "Numeral style",
+          "numeralMode.engrave": "Engraved (outline / fill)",
+          "numeralMode.engraveStroke": "Engraved (single-line)",
+          "numeralMode.cutout": "Cut-out (with automatic bridges)",
+          "numeralMode.title": "Cut-out numerals automatically generate stencil bridges for inner islands (0, 4, 6, 8, 9).",
+          "font": "Font",
+          "font.sans": "Modern Sans",
+          "font.serif": "Classic Serif",
+          "font.rounded": "Soft Rounded",
+          "font.artdeco": "Art Deco",
+          "font.slab": "Slab Serif",
+          "font.technical": "Technical (chamfered)",
+          "numeralSize": "Numeral height",
+          "numeralRadiusPct": "Numeral ring position (%)",
+          "numeralRadiusPct.title": "Distance of numerals from the centre as a percentage of the dial radius.",
+          "rotateNumerals": "Rotate numerals radially",
+          "bridgeWidth": "Bridge width",
+          "bridgeWidth.title": "Width of the stencil bridges holding inner numeral islands (0, 4, 6, 8, 9).",
+          "bridgeCount": "Bridges per island",
+          "bridgeCount.auto": "Auto (1 small, 2 large)",
+          "bridgeCount.1": "1 bridge",
+          "bridgeCount.2": "2 bridges",
+          "bridgeDirection": "Bridge direction",
+          "bridgeDirection.shortest": "Shortest path (auto)",
+          "bridgeDirection.vertical": "Vertical",
+          "bridgeDirection.horizontal": "Horizontal",
+          "skeletonSpokes": "Skeleton spokes",
+          "skeletonHubDia": "Centre hub diameter",
+          "tickMode": "Tick marks",
+          "tickMode.hoursAndMinutes": "Hours & minutes (60)",
+          "tickMode.hours": "Hours only (12)",
+          "tickMode.quarters": "Quarter hours only (4)",
+          "tickMode.minutesOnly": "Uniform minutes (60)",
+          "tickMode.none": "None",
+          "tickStyle": "Tick shape",
+          "tickStyle.line": "Single engraved line",
+          "tickStyle.bar": "Bar (outline / fill)",
+          "tickStyle.taper": "Tapered wedge",
+          "tickStyle.dot": "Round dots",
+          "tickStyle.cutout": "Cut-out slots",
+          "tickInset": "Margin from edge",
+          "hourTickLength": "Hour tick length",
+          "hourTickWidth": "Hour tick width",
+          "minuteTickLength": "Minute tick length",
+          "minuteTickWidth": "Minute tick width",
+          "quarterAccent": "Emphasise 12 / 3 / 6 / 9",
+          "chapterRing": "Chapter ring",
+          "chapterRing.none": "None",
+          "chapterRing.outer": "Outer circle",
+          "chapterRing.inner": "Inner circle",
+          "chapterRing.double": "Double railway track",
+          "includeHands": "Generate clock hands",
+          "handStyle": "Hand style",
+          "handStyle.baton": "Baton (modern)",
+          "handStyle.dauphine": "Dauphine (diamond)",
+          "handStyle.spade": "Spade (classic)",
+          "handStyle.breguet": "Breguet (open moon)",
+          "handStyle.railway": "Station clock (SBB)",
+          "handStyle.arrow": "Arrow",
+          "handStyle.leaf": "Leaf (Feuille)",
+          "handStyle.cathedral": "Cathedral (ornate)",
+          "includeSecondHand": "Include second hand",
+          "handWidth": "Hand base width",
+          "hourHandPct": "Hour hand length (%)",
+          "minuteHandPct": "Minute hand length (%)",
+          "hourHoleDia": "Hour hand hole",
+          "minuteHoleDia": "Minute hand hole",
+          "secondHoleDia": "Second hand hole",
+          "arch-too-short": "An arch clock needs a height of at least {min} mm for this width.",
+          "shaft-too-large": "The shaft hole is too large for this clock (at most {max} mm).",
+          "ring-too-wide": "The spacer ring is too wide for this clock (at most {max} mm).",
+          "movement-too-large": "The movement cutout is too large for the backplate (at most {max} mm).",
+          "movement-touches-ring": "The corners of the movement cutout overlap the spacer ring.",
+          "ticks-too-long": "The tick marks are too long and reach the centre shaft hole.",
+          "tick-cutout-thin": "Cut-out tick slots narrower than 1.2 mm may burn out.",
+          "numerals-outside": "The numerals extend beyond the edge of the dial.",
+          "numerals-hit-shaft": "The numerals overlap the centre shaft hole.",
+          "ticks-overlap-numerals": "The tick marks overlap the numerals; reduce numeral position or tick length.",
+          "cutout-numerals-small": "Cut-out numerals under 12 mm high have very delicate islands.",
+          "bridge-wide": "The bridge width is very large compared to the numeral height.",
+          "skeleton-too-tight": "Not enough radial room for skeleton windows; shrink hub diameter or numeral size.",
+          "info.size": "Outer size",
+          "info.sizeValue": "{w} × {h} mm",
+          "info.parts": "Total parts",
+          "info.depth": "Stacked depth",
+          "info.mmValue": "{v} mm",
+          "info.ticks": "Tick marks",
+          "info.bridges": "Stencil bridges",
+          "info.bridgesValue": "{b} bridges ({i} islands)",
+          "info.hands": "Hand lengths (H / M)",
+          "info.handsValue": "{h} / {m} mm"
+        },
+        "de": {
+          "name": "Analoge Uhr",
+          "desc": "Parametrische analoge Uhr mit optionaler Grundplatte, Abstandsringen, gravierten oder ausgeschnittenen Ziffern mit automatischen Stegen, wählbarer Schrift, Markierungen und Zeigern.",
+          "keys": "Uhr Wanduhr Zifferblatt Ziffern Zeiger Stege Schablone Abstandsring Grundplatte Analog",
+          "label": "Uhr ({w} × {h} mm)",
+          "part.backplate": "Grundplatte",
+          "part.ring": "Abstandsring {n}",
+          "part.dial": "Zifferblatt",
+          "part.handHour": "Stundenzeiger",
+          "part.handMinute": "Minutenzeiger",
+          "part.handSecond": "Sekundenzeiger",
+          "step.body": "Form",
+          "step.layers": "Platten & Ringe",
+          "step.dial": "Zifferblatt & Schrift",
+          "step.ticks": "Markierungen",
+          "step.hands": "Zeiger",
+          "shape": "Uhrenform",
+          "shape.circle": "Rund (Kreis)",
+          "shape.square": "Quadratisch",
+          "shape.rectangle": "Rechteckig",
+          "shape.oval": "Oval (Ellipse)",
+          "shape.octagon": "Achteck (Oktogon)",
+          "shape.hexagon": "Sechseck (Hexagon)",
+          "shape.dodecagon": "Zwölfeck (Dodekagon)",
+          "shape.arch": "Rundbogen (Kaminsuhr)",
+          "shape.squircle": "Kissenform",
+          "shape.scalloped": "Wellenrand (12 Bögen)",
+          "diameter": "Durchmesser / Größe",
+          "width": "Breite",
+          "height": "Höhe",
+          "cornerRadius": "Eckenradius",
+          "thickness": "Materialstärke",
+          "thickness.title": "Wird für die 3D-Ansicht und die Gesamtdicke der Lagen verwendet.",
+          "shaftDia": "Achsloch (Uhrwerk)",
+          "shaftDia.title": "Durchmesser der Mittelbohrung im Zifferblatt (Standard-Quarzwerk: ca. 7,5–8 mm).",
+          "backplate": "Grundplatte generieren",
+          "backplateCenter": "Ausschnitt Grundplatte",
+          "backplateCenter.none": "Keiner (geschlossen)",
+          "backplateCenter.shaft": "Achsloch",
+          "backplateCenter.movement": "Uhrwerk-Aussparung",
+          "movementSize": "Uhrwerk-Größe",
+          "movementSize.title": "Quadratischer Ausschnitt für das Uhrwerkgehäuse (Standard-Quarzwerk: 56 × 56 mm).",
+          "hangerHole": "Aufhängeloch (Schlüsselloch)",
+          "hangerHole.title": "Schneidet oben in der Grundplatte ein Schlüsselloch zum Aufhängen aus.",
+          "ringCount": "Anzahl Abstandsringe",
+          "ringCount.title": "Anzahl der Ringe, die als Abstandhalter zwischen Grundplatte und Zifferblatt aufgeleimt werden.",
+          "ringWidth": "Ringbreite",
+          "glueMarks": "Klebemarken gravieren",
+          "glueMarks.title": "Graviert den Ringumriss und Lagennummern als Ausrichthilfe beim Verleimen.",
+          "dialStyle": "Zifferblatt-Stil",
+          "dialStyle.classic": "Klassisch (1–12)",
+          "dialStyle.quarters": "Viertelstunden (12, 3, 6, 9)",
+          "dialStyle.roman": "Römisch (I–XII)",
+          "dialStyle.romanQuarters": "Römisch Viertel (XII, III, VI, IX)",
+          "dialStyle.minimal": "Minimalistisch (nur Striche)",
+          "dialStyle.station": "Bahnhofsuhr (kräftige Balken)",
+          "dialStyle.skeleton": "Skelettiert (Speichen-Durchbruch)",
+          "numeralMode": "Ziffern-Art",
+          "numeralMode.engrave": "Graviert (Umriss / Füllung)",
+          "numeralMode.engraveStroke": "Graviert (Einzellinie)",
+          "numeralMode.cutout": "Ausgeschnitten (mit automatischen Stegen)",
+          "numeralMode.title": "Bei ausgeschnittenen Ziffern werden für Innenflächen (0, 4, 6, 8, 9) automatisch Stege erzeugt.",
+          "font": "Schriftart",
+          "font.sans": "Modern Grotesk",
+          "font.serif": "Klassisch Serif (Antiqua)",
+          "font.rounded": "Abgerundet",
+          "font.artdeco": "Art Déco",
+          "font.slab": "Slab Serif (Kräftig)",
+          "font.technical": "Technisch (Kantig)",
+          "numeralSize": "Ziffernhöhe",
+          "numeralRadiusPct": "Ziffern-Position (%)",
+          "numeralRadiusPct.title": "Abstand der Ziffern vom Mittelpunkt in Prozent des Zifferblattradius.",
+          "rotateNumerals": "Ziffern radial mitdrehen",
+          "bridgeWidth": "Stegbreite",
+          "bridgeWidth.title": "Breite der Haltestege für Innenflächen ausgeschnittener Ziffern (0, 4, 6, 8, 9).",
+          "bridgeCount": "Stege pro Insel",
+          "bridgeCount.auto": "Automatisch (1 klein, 2 groß)",
+          "bridgeCount.1": "1 Steg",
+          "bridgeCount.2": "2 Stege",
+          "bridgeDirection": "Steg-Richtung",
+          "bridgeDirection.shortest": "Kürzester Weg (Auto)",
+          "bridgeDirection.vertical": "Senkrecht",
+          "bridgeDirection.horizontal": "Waagerecht",
+          "skeletonSpokes": "Anzahl Speichen",
+          "skeletonHubDia": "Nabendurchmesser",
+          "tickMode": "Striche / Markierungen",
+          "tickMode.hoursAndMinutes": "Stunden & Minuten (60)",
+          "tickMode.hours": "Nur Stunden (12)",
+          "tickMode.quarters": "Nur Viertelstunden (4)",
+          "tickMode.minutesOnly": "Gleichmäßige Minuten (60)",
+          "tickMode.none": "Keine",
+          "tickStyle": "Strichform",
+          "tickStyle.line": "Einzellinie (Gravur)",
+          "tickStyle.bar": "Balken (Umriss / Füllung)",
+          "tickStyle.taper": "Keil / Spitz",
+          "tickStyle.dot": "Punkte",
+          "tickStyle.cutout": "Ausgeschnittene Schlitze",
+          "tickInset": "Randabstand",
+          "hourTickLength": "Länge Stundenstrich",
+          "hourTickWidth": "Breite Stundenstrich",
+          "minuteTickLength": "Länge Minutenstrich",
+          "minuteTickWidth": "Breite Minutenstrich",
+          "quarterAccent": "12 / 3 / 6 / 9 hervorheben",
+          "chapterRing": "Zierkreis (Minuterie)",
+          "chapterRing.none": "Keiner",
+          "chapterRing.outer": "Äußerer Kreis",
+          "chapterRing.inner": "Innerer Kreis",
+          "chapterRing.double": "Doppelkreis (Eisenbahn)",
+          "includeHands": "Zeiger generieren",
+          "handStyle": "Zeigerform",
+          "handStyle.baton": "Stabzeiger (Modern)",
+          "handStyle.dauphine": "Dauphine (Raute)",
+          "handStyle.spade": "Spade (Pik-Form)",
+          "handStyle.breguet": "Breguet (Mondzeiger)",
+          "handStyle.railway": "Bahnhofsuhr (SBB)",
+          "handStyle.arrow": "Pfeilzeiger",
+          "handStyle.leaf": "Blattform (Feuille)",
+          "handStyle.cathedral": "Kathedralenzeiger (Vintage)",
+          "includeSecondHand": "Sekundenzeiger",
+          "handWidth": "Zeiger-Basisbreite",
+          "hourHandPct": "Stundenzeiger-Länge (%)",
+          "minuteHandPct": "Minutenzeiger-Länge (%)",
+          "hourHoleDia": "Bohrung Stundenzeiger",
+          "minuteHoleDia": "Bohrung Minutenzeiger",
+          "secondHoleDia": "Bohrung Sekundenzeiger",
+          "arch-too-short": "Eine Rundbogenuhr braucht bei dieser Breite eine Höhe von mindestens {min} mm.",
+          "shaft-too-large": "Das Achsloch ist zu groß für diese Uhr (höchstens {max} mm).",
+          "ring-too-wide": "Der Abstandsring ist zu breit für diese Uhr (höchstens {max} mm).",
+          "movement-too-large": "Die Uhrwerk-Aussparung ist zu groß für die Grundplatte (höchstens {max} mm).",
+          "movement-touches-ring": "Die Ecken der Uhrwerk-Aussparung überlappen den Abstandsring.",
+          "ticks-too-long": "Die Markierungen sind zu lang und erreichen das Achsloch.",
+          "tick-cutout-thin": "Ausgeschnittene Schlitze unter 1,2 mm Breite können ausbrennen.",
+          "numerals-outside": "Die Ziffern ragen über den Rand des Zifferblatts hinaus.",
+          "numerals-hit-shaft": "Die Ziffern überlappen das mittlere Achsloch.",
+          "ticks-overlap-numerals": "Die Markierungen überschneiden die Ziffern; Ziffern-Position oder Strichlänge verringern.",
+          "cutout-numerals-small": "Ausgeschnittene Ziffern unter 12 mm Höhe ergeben sehr filigrane Inseln.",
+          "bridge-wide": "Die Stegbreite ist im Verhältnis zur Ziffernhöhe sehr groß.",
+          "skeleton-too-tight": "Zu wenig Platz für die Skelett-Durchbrüche; Nabendurchmesser oder Ziffernhöhe verringern.",
+          "info.size": "Außenmaß",
+          "info.sizeValue": "{w} × {h} mm",
+          "info.parts": "Teile gesamt",
+          "info.depth": "Gesamthöhe (Lagen)",
+          "info.mmValue": "{v} mm",
+          "info.ticks": "Markierungen",
+          "info.bridges": "Haltestege (Ziffern)",
+          "info.bridgesValue": "{b} Stege ({i} Inseln)",
+          "info.hands": "Zeigerlängen (Std / Min)",
+          "info.handsValue": "{h} / {m} mm"
+        },
+        "it": {
+          "name": "Orologio analogico",
+          "desc": "Orologio analogico parametrico con piastra di fondo opzionale, anelli distanziatori, cifre incise o ritagliate con ponticelli automatici, caratteri selezionabili, tacche e lancette.",
+          "keys": "orologio quadrante cifre lancette anelli distanziatori ponticelli analogico",
+          "label": "Orologio ({w} × {h} mm)",
+          "part.backplate": "Piastra di fondo",
+          "part.ring": "Anello distanziatore {n}",
+          "part.dial": "Quadrante",
+          "part.handHour": "Lancetta ore",
+          "part.handMinute": "Lancetta minuti",
+          "part.handSecond": "Lancetta secondi",
+          "step.body": "Forma",
+          "step.layers": "Piastre e anelli",
+          "step.dial": "Quadrante e carattere",
+          "step.ticks": "Tacche",
+          "step.hands": "Lancette",
+          "shape": "Forma dell'orologio",
+          "shape.circle": "Rotondo (cerchio)",
+          "shape.square": "Quadrato",
+          "shape.rectangle": "Rettangolare",
+          "shape.oval": "Ovale (ellisse)",
+          "shape.octagon": "Ottagono",
+          "shape.hexagon": "Esagono",
+          "shape.dodecagon": "Dodecagono",
+          "shape.arch": "Arco (orologio da camino)",
+          "shape.squircle": "Cuscino",
+          "shape.scalloped": "Smerlato (12 lobi)",
+          "diameter": "Diametro / dimensione",
+          "width": "Larghezza",
+          "height": "Altezza",
+          "cornerRadius": "Raggio angoli",
+          "thickness": "Spessore materiale",
+          "thickness.title": "Usato per la vista 3D e lo spessore totale.",
+          "shaftDia": "Foro perno meccanismo",
+          "shaftDia.title": "Diametro del foro centrale nel quadrante (quarzo standard: ~7,5–8 mm).",
+          "backplate": "Includi piastra di fondo",
+          "backplateCenter": "Ritagli centrali fondo",
+          "backplateCenter.none": "Nessuno (chiuso)",
+          "backplateCenter.shaft": "Foro perno",
+          "backplateCenter.movement": "Sede meccanismo al quarzo",
+          "movementSize": "Dimensione meccanismo",
+          "movementSize.title": "Apertura quadrata per il meccanismo (standard: 56 × 56 mm).",
+          "hangerHole": "Asola di aggancio",
+          "hangerHole.title": "Ritaglia una fessura a serratura in alto sulla piastra di fondo.",
+          "ringCount": "Anelli distanziatori",
+          "ringCount.title": "Numero di anelli incollati tra piastra di fondo e quadrante.",
+          "ringWidth": "Larghezza anello",
+          "glueMarks": "Segni di allineamento",
+          "glueMarks.title": "Incide il contorno dell'anello e i numeri di strato per l'incollaggio.",
+          "dialStyle": "Stile quadrante",
+          "dialStyle.classic": "Classico (1–12)",
+          "dialStyle.quarters": "Quarti d'ora (12, 3, 6, 9)",
+          "dialStyle.roman": "Romano (I–XII)",
+          "dialStyle.romanQuarters": "Romano quarti (XII, III, VI, IX)",
+          "dialStyle.minimal": "Minimalista (solo tacche)",
+          "dialStyle.station": "Stazione (indici larghi)",
+          "dialStyle.skeleton": "Scheletrato (raggi aperti)",
+          "numeralMode": "Tipo di cifre",
+          "numeralMode.engrave": "Incise (contorno / riempimento)",
+          "numeralMode.engraveStroke": "Incise (linea singola)",
+          "numeralMode.cutout": "Ritagliate (con ponticelli automatici)",
+          "numeralMode.title": "Le cifre ritagliate generano automaticamente ponticelli per le isole interne (0, 4, 6, 8, 9).",
+          "font": "Carattere",
+          "font.sans": "Sans moderno",
+          "font.serif": "Serif classico",
+          "font.rounded": "Arrotondato",
+          "font.artdeco": "Art Déco",
+          "font.slab": "Slab Serif",
+          "font.technical": "Tecnico (smussato)",
+          "numeralSize": "Altezza cifre",
+          "numeralRadiusPct": "Posizione cifre (%)",
+          "numeralRadiusPct.title": "Distanza delle cifre dal centro in percentuale del raggio.",
+          "rotateNumerals": "Ruota le cifre radialmente",
+          "bridgeWidth": "Larghezza ponticello",
+          "bridgeWidth.title": "Larghezza dei ponticelli che sostengono le isole interne (0, 4, 6, 8, 9).",
+          "bridgeCount": "Ponticelli per isola",
+          "bridgeCount.auto": "Auto (1 piccolo, 2 grande)",
+          "bridgeCount.1": "1 ponticello",
+          "bridgeCount.2": "2 ponticelli",
+          "bridgeDirection": "Direzione ponticelli",
+          "bridgeDirection.shortest": "Più corto (auto)",
+          "bridgeDirection.vertical": "Verticale",
+          "bridgeDirection.horizontal": "Orizzontale",
+          "skeletonSpokes": "Numero di raggi",
+          "skeletonHubDia": "Diametro mozzo centrale",
+          "tickMode": "Tacche",
+          "tickMode.hoursAndMinutes": "Ore e minuti (60)",
+          "tickMode.hours": "Solo ore (12)",
+          "tickMode.quarters": "Solo quarti d'ora (4)",
+          "tickMode.minutesOnly": "Minuti uniformi (60)",
+          "tickMode.none": "Nessuna",
+          "tickStyle": "Forma delle tacche",
+          "tickStyle.line": "Linea incisa singola",
+          "tickStyle.bar": "Barra (contorno / riempimento)",
+          "tickStyle.taper": "Cuneo rastremato",
+          "tickStyle.dot": "Punti",
+          "tickStyle.cutout": "Fessure ritagliate",
+          "tickInset": "Margine dal bordo",
+          "hourTickLength": "Lunghezza tacca ore",
+          "hourTickWidth": "Larghezza tacca ore",
+          "minuteTickLength": "Lunghezza tacca minuti",
+          "minuteTickWidth": "Larghezza tacca minuti",
+          "quarterAccent": "Evidenzia 12 / 3 / 6 / 9",
+          "chapterRing": "Cerchio minuteria",
+          "chapterRing.none": "Nessuno",
+          "chapterRing.outer": "Cerchio esterno",
+          "chapterRing.inner": "Cerchio interno",
+          "chapterRing.double": "Doppio cerchio",
+          "includeHands": "Genera lancette",
+          "handStyle": "Stile lancette",
+          "handStyle.baton": "Bastone (moderno)",
+          "handStyle.dauphine": "Dauphine (rombo)",
+          "handStyle.spade": "Picche (classico)",
+          "handStyle.breguet": "Breguet (luna aperta)",
+          "handStyle.railway": "Stazione (SBB)",
+          "handStyle.arrow": "Freccia",
+          "handStyle.leaf": "Foglia (Feuille)",
+          "handStyle.cathedral": "Cattedrale (vintage)",
+          "includeSecondHand": "Includi lancetta secondi",
+          "handWidth": "Larghezza base lancetta",
+          "hourHandPct": "Lunghezza lancetta ore (%)",
+          "minuteHandPct": "Lunghezza lancetta minuti (%)",
+          "hourHoleDia": "Foro lancetta ore",
+          "minuteHoleDia": "Foro lancetta minuti",
+          "secondHoleDia": "Foro lancetta secondi",
+          "arch-too-short": "Un orologio ad arco richiede un'altezza di almeno {min} mm per questa larghezza.",
+          "shaft-too-large": "Il foro centrale è troppo grande (al massimo {max} mm).",
+          "ring-too-wide": "L'anello distanziatore è troppo largo (al massimo {max} mm).",
+          "movement-too-large": "La sede del meccanismo è troppo grande per la piastra (al massimo {max} mm).",
+          "movement-touches-ring": "Gli angoli della sede del meccanismo si sovrappongono all'anello distanziatore.",
+          "ticks-too-long": "Le tacche sono troppo lunghe e raggiungono il foro centrale.",
+          "tick-cutout-thin": "Le fessure ritagliate più strette di 1,2 mm possono bruciarsi.",
+          "numerals-outside": "Le cifre sporgono oltre il bordo del quadrante.",
+          "numerals-hit-shaft": "Le cifre si sovrappongono al foro centrale.",
+          "ticks-overlap-numerals": "Le tacche si sovrappongono alle cifre; riduci la posizione delle cifre o la lunghezza delle tacche.",
+          "cutout-numerals-small": "Cifre ritagliate sotto 12 mm hanno isole molto fragili.",
+          "bridge-wide": "La larghezza del ponticello è molto grande rispetto all'altezza delle cifre.",
+          "skeleton-too-tight": "Spazio insufficiente per le aperture scheletrate; riduci mozzo o cifre.",
+          "info.size": "Dimensioni esterne",
+          "info.sizeValue": "{w} × {h} mm",
+          "info.parts": "Parti totali",
+          "info.depth": "Spessore totale",
+          "info.mmValue": "{v} mm",
+          "info.ticks": "Tacche",
+          "info.bridges": "Ponticelli (cifre)",
+          "info.bridgesValue": "{b} ponticelli ({i} isole)",
+          "info.hands": "Lunghezza lancette (O / M)",
+          "info.handsValue": "{h} / {m} mm"
+        }
+      }
+    }
+  ]
+}
