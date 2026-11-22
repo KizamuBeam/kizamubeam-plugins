@@ -675,9 +675,9 @@ test('3D alignment: every roof tenon edge lines up with its roof slot guide in 3
         cx = D / 2;
         cy = srcPose.o[2];
       } else {
-        // truss
+        // truss is centered at (innerSpan/2, rise/2) where bottom edge sits at y = maxY = rise
         cx = (maxX + minX) / 2;
-        cy = (maxY + minY) / 2;
+        cy = maxY / 2;
       }
       // Account for turnOver mirroring on back & right
       const isTurned = srcKey === 'back' || srcKey === 'right';
@@ -705,4 +705,262 @@ test('3D alignment: every roof tenon edge lines up with its roof slot guide in 3
     }
   }
 });
+
+test('Block 1.1: shed roof with open high wall has zero check-web-cut errors in all directions', () => {
+  const { plugin } = loadPlugin();
+  const base = defaultParams();
+  const cases = [
+    { shedDir: 'front', wallBack: false },
+    { shedDir: 'back', wallFront: false },
+    { shedDir: 'left', wallRight: false },
+    { shedDir: 'right', wallLeft: false },
+    { shedDir: 'front', wallBack: false, wallFront: false },
+    { shedDir: 'front', wallBack: false, roofMount: 'removable' },
+  ];
+  for (const c of cases) {
+    const p = { ...base, roofType: 'shed', roofAngle: 25, openings: '[]', ...c };
+    const issues = plugin.validate(p);
+    const errs = issues.filter((i) => i.level === 'error');
+    assert.equal(errs.length, 0, `Shed open-high-wall ${JSON.stringify(c)} failed: ${JSON.stringify(errs)}`);
+    const res = plugin.generate(p);
+    assert.ok(res.parts.length >= 3, `Expected valid parts for ${JSON.stringify(c)}`);
+  }
+});
+
+test('Block 1.2: steep gable roof (65°-72°, fixed & removable) has zero check-web-cut and exact 3D alignment', () => {
+  const base = defaultParams();
+  const cases = [
+    { roofAngle: 65, ridgeAxis: 'x', roofMount: 'fixed' },
+    { roofAngle: 72, ridgeAxis: 'x', roofMount: 'fixed' },
+    { roofAngle: 70, ridgeAxis: 'y', roofMount: 'fixed' },
+    { roofAngle: 68, ridgeAxis: 'x', roofMount: 'removable' },
+    { roofAngle: 72, ridgeAxis: 'y', roofMount: 'removable' },
+  ];
+  for (const c of cases) {
+    const { plugin, jointCalls } = loadPlugin();
+    const p = { ...base, roofType: 'gable', roofGableOverhang: 6, roofOverhang: 8, openings: '[]', ...c };
+    const errs = plugin.validate(p).filter((i) => i.level === 'error');
+    assert.equal(errs.length, 0, `Steep gable ${JSON.stringify(c)} failed: ${JSON.stringify(errs)}`);
+    const res = plugin.generate(p);
+    const poses = res.poses.poses;
+    const t = p.thickness;
+    const W = p.width,
+      D = p.depth;
+    const roofKeys = Object.keys(poses).filter((k) => k.startsWith('roof') && !k.startsWith('roof-truss'));
+    const roofTenons = jointCalls.filter(
+      (jc) => jc.op === 'edge' && jc.options?.kind === 'tenon' && jc.edges.length === 2 && jc.edges[1].part === '_guide',
+    );
+    assert.ok(roofTenons.length > 0, `Expected roof tenon joints for steep gable ${JSON.stringify(c)}`);
+    for (const jc of roofTenons) {
+      const srcKey = jc.edges[0].part;
+      const srcPose = poses[srcKey];
+      const sp = jc.parts[srcKey][0];
+      const seg = jc.edges[0].seg;
+      const a = sp.nodes[seg];
+      const b = sp.nodes[(seg + 1) % sp.nodes.length];
+      const rawMidX = (a.x + b.x) / 2;
+      const rawMidY = (a.y + b.y) / 2;
+      let minX = Infinity,
+        maxX = -Infinity,
+        maxY = -Infinity;
+      for (const n of sp.nodes) (minX = Math.min(minX, n.x)), (maxX = Math.max(maxX, n.x)), (maxY = Math.max(maxY, n.y));
+      const cx = srcKey === 'front' || srcKey === 'back' ? W / 2 : srcKey === 'left' || srcKey === 'right' ? D / 2 : (maxX + minX) / 2;
+      const cy = srcKey.startsWith('roof-truss') ? maxY / 2 : srcPose.o[2];
+      const isTurned = srcKey === 'back' || srcKey === 'right';
+      const localX = isTurned ? -(rawMidX - cx) : rawMidX - cx;
+      const localY = rawMidY - cy;
+      const p3Src = applyPose(srcPose, localX, localY, t / 2);
+      const gNodes = jc.parts._guide[0].nodes;
+      const gMidX = (gNodes[0].x + gNodes[1].x) / 2;
+      const gMidY = (gNodes[0].y + gNodes[1].y) / 2;
+      let bestDist = Infinity;
+      for (const rk of roofKeys) {
+        const p3Roof = applyPose(poses[rk], gMidX, gMidY, 0);
+        bestDist = Math.min(bestDist, Math.hypot(p3Src[0] - p3Roof[0], p3Src[1] - p3Roof[1], p3Src[2] - p3Roof[2]));
+      }
+      assert.ok(bestDist < 1e-3, `Steep gable 3D mismatch for ${JSON.stringify(c)} src=${srcKey}: dist=${bestDist}`);
+    }
+  }
+});
+
+test('Block 1.3: onChange width, depth, and height scales opening positions, sizes, and interior wall openings', () => {
+  const { plugin } = loadPlugin();
+  const base = defaultParams();
+  const withInner = {
+    ...base,
+    width: 120,
+    depth: 90,
+    height: 70,
+    walls: JSON.stringify([{ id: 1, axis: 'v', pos: 57, from: 0, to: 84 }]),
+    wallsRef: JSON.stringify([114, 84]),
+    openings: JSON.stringify([
+      { id: 1, wall: 'front', kind: 'door', style: 'rect', x: 30, y: 0, w: 20, h: 40 },
+      { id: 2, wall: 'left', kind: 'window', style: 'cross', x: 45, y: 20, w: 18, h: 20 },
+      { id: 3, wall: 'wall-1', kind: 'door', style: 'rect', x: 42, y: 0, w: 18, h: 38 },
+    ]),
+  };
+
+  // Scale width 120 -> 180 (+50%)
+  const resW = plugin.onChange({ key: 'width', old: 120, params: { ...withInner, width: 180 } });
+  assert.ok(resW?.ask?.options?.[0]?.patch?.openings, 'Width resize should offer scaled openings');
+  const opsW = JSON.parse(resW.ask.options[0].patch.openings);
+  assert.equal(opsW[0].x, 45); // 30 * 1.5
+  assert.equal(opsW[0].w, 30); // 20 * 1.5
+  assert.equal(opsW[1].w, 18); // left wall unchanged by width
+  const pAfterW = { ...withInner, width: 180, ...resW.ask.options[0].patch };
+  assert.equal(plugin.validate(pAfterW).filter((i) => i.level === 'error').length, 0);
+
+  // Scale depth 90 -> 135 (+50%): scales left wall AND vertical interior wall-1!
+  const resD = plugin.onChange({ key: 'depth', old: 90, params: { ...withInner, depth: 135 } });
+  const opsD = JSON.parse(resD.ask.options[0].patch.openings);
+  assert.equal(opsD[1].x, 67.5); // 45 * 1.5
+  assert.equal(opsD[1].w, 27); // 18 * 1.5
+  assert.equal(opsD[2].x, 63); // wall-1 (vertical) 42 * 1.5
+  assert.equal(opsD[2].w, 27); // wall-1 (vertical) 18 * 1.5
+  const pAfterD = { ...withInner, depth: 135, ...resD.ask.options[0].patch };
+  assert.equal(plugin.validate(pAfterD).filter((i) => i.level === 'error').length, 0);
+
+  // Scale height 70 -> 100: scales opening y (non-zero) and h, keeping door y=0 at 0!
+  const resH = plugin.onChange({ key: 'height', old: 70, params: { ...withInner, height: 100 } });
+  assert.ok(resH?.ask?.options?.[0]?.patch?.openings, 'Height resize should offer scaled openings');
+  const opsH = JSON.parse(resH.ask.options[0].patch.openings);
+  assert.equal(opsH[0].y, 0); // door stays at threshold y=0
+  assert.ok(opsH[0].h > 50, `Expected door height to grow with house height, got ${opsH[0].h}`);
+  assert.ok(opsH[1].y > 25 && opsH[1].h > 25, `Expected window y & h to grow, got y=${opsH[1].y}, h=${opsH[1].h}`);
+  const pAfterH = { ...withInner, height: 100, ...resH.ask.options[0].patch };
+  assert.equal(plugin.validate(pAfterH).filter((i) => i.level === 'error').length, 0);
+});
+
+test('Block 1.4: shaped L-footprint validates openings against built spans and engraves concave flat roof', () => {
+  const { plugin } = loadPlugin();
+  const base = defaultParams();
+  const t = 3,
+    w = 114,
+    d = 84;
+  // L-shaped contour: notch cut out on back-right (back edge only spans x=-1.5..57, right edge only spans y=42..85.5)
+  const lWalls = [
+    { id: 1, axis: 'h', pos: -t / 2, from: -t / 2, to: w / 2 },
+    { id: 2, axis: 'v', pos: w / 2, from: -t / 2, to: d / 2 },
+    { id: 3, axis: 'h', pos: d / 2, from: w / 2, to: w + t / 2 },
+    { id: 4, axis: 'v', pos: w + t / 2, from: d / 2, to: d + t / 2 },
+    { id: 5, axis: 'h', pos: d + t / 2, from: -t / 2, to: w + t / 2 },
+    { id: 6, axis: 'v', pos: -t / 2, from: -t / 2, to: d + t / 2 },
+  ];
+  const baseL = {
+    ...base,
+    roofType: 'flat',
+    roofOverhang: 6,
+    roofPattern: 'tiles',
+    roofPatternSize: 10,
+    walls: JSON.stringify(lWalls),
+    wallsRef: JSON.stringify([w, d]),
+  };
+
+  // Back wall in exterior coords (flipX=true): built edge x=[-1.5..57] -> outer [0..61.5] -> flipped exterior [58.5..120].
+  // Opening at x=25 on 'back' is in the notched-out corner -> must fail with opening-outside!
+  const badOp = { ...baseL, openings: JSON.stringify([{ id: 1, wall: 'back', kind: 'window', style: 'rect', x: 25, y: 20, w: 16, h: 16 }]) };
+  assert.ok(
+    plugin.validate(badOp).some((i) => i.code === 'opening-outside'),
+    'Expected opening in notched-out L-corner to be rejected with opening-outside',
+  );
+
+  // Opening at x=90 on 'back' (inside [58.5..120]) and x=30 on 'front' -> valid and generates marks strictly inside concave L-roof!
+  const goodOp = {
+    ...baseL,
+    openings: JSON.stringify([
+      { id: 1, wall: 'back', kind: 'window', style: 'rect', x: 90, y: 20, w: 16, h: 16 },
+      { id: 2, wall: 'front', kind: 'door', style: 'rect', x: 30, y: 0, w: 20, h: 38 },
+    ]),
+  };
+  const errs = plugin.validate(goodOp).filter((i) => i.level === 'error');
+  assert.equal(errs.length, 0, `Valid L-house openings failed: ${JSON.stringify(errs)}`);
+  const res = plugin.generate(goodOp);
+  const roofPart = res.parts.find((pt) => pt.key === 'roof');
+  assert.ok(roofPart?.marks && roofPart.marks.length > 0, 'Expected engraved roof pattern marks on concave L-roof');
+
+  // Verify NO engraving point falls inside the notched-out back-right quadrant (x > 10 && y < -10 in centered L-roof coords)!
+  for (const mk of roofPart.marks) {
+    for (const n of mk.nodes) {
+      assert.ok(
+        !(n.x > 12 && n.y < -12),
+        `Concave L-roof engraving mark leaked into cut-out corner at (${n.x.toFixed(2)}, ${n.y.toFixed(2)})`,
+      );
+    }
+  }
+});
+
+test('Block 1.5: roof engraving skips tenon slots and oversized opening frames warn & stay clamped inside wall', () => {
+  const { plugin } = loadPlugin();
+  const base = defaultParams();
+
+  // 1. Fixed gable roof with dense tile pattern: verify zero mark segments cross any tenon slot hole!
+  const pRoof = {
+    ...base,
+    roofType: 'gable',
+    roofMount: 'fixed',
+    roofGableOverhang: 8,
+    roofOverhang: 8,
+    roofPattern: 'tiles',
+    roofPatternSize: 8,
+  };
+  const resRoof = plugin.generate(pRoof);
+  for (const rk of ['roof-front', 'roof-back']) {
+    const part = resRoof.parts.find((pt) => pt.key === rk);
+    assert.ok(part.subs.length > 1, `Expected tenon slot holes in ${rk}`);
+    assert.ok(part.marks && part.marks.length > 0, `Expected tile marks on ${rk}`);
+    const holes = part.subs.slice(1).map((sp) => {
+      let x0 = Infinity,
+        x1 = -Infinity,
+        y0 = Infinity,
+        y1 = -Infinity;
+      for (const n of sp.nodes) (x0 = Math.min(x0, n.x)), (x1 = Math.max(x1, n.x)), (y0 = Math.min(y0, n.y)), (y1 = Math.max(y1, n.y));
+      return [x0, y0, x1, y1];
+    });
+    for (const mk of part.marks) {
+      for (let i = 0; i + 1 < mk.nodes.length; i++) {
+        const a = mk.nodes[i],
+          b = mk.nodes[i + 1];
+        for (const [x0, y0, x1, y1] of holes) {
+          // Sample along mark segment and verify no point lies inside a tenon slot hole
+          for (let s = 0; s <= 4; s++) {
+            const px = a.x + ((b.x - a.x) * s) / 4;
+            const py = a.y + ((b.y - a.y) * s) / 4;
+            assert.ok(
+              !(px > x0 - 0.1 && px < x1 + 0.1 && py > y0 - 0.1 && py < y1 + 0.1),
+              `Roof engraving mark on ${rk} entered tenon slot [${x0.toFixed(1)},${y0.toFixed(1)}..${x1.toFixed(1)},${y1.toFixed(1)}] at (${px.toFixed(2)},${py.toFixed(2)})`,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Oversized engraved frameWidth near wall edge triggers non-blocking warn AND clamps marks inside wall outline!
+  const pTightFrame = {
+    ...base,
+    engraveFrames: true,
+    frameWidth: 8,
+    openings: JSON.stringify([{ id: 1, wall: 'front', kind: 'window', style: 'rect', x: 18, y: 20, w: 18, h: 18 }]),
+  };
+  const issues = plugin.validate(pTightFrame);
+  assert.equal(issues.filter((i) => i.level === 'error').length, 0, `Expected zero errors, got ${JSON.stringify(issues)}`);
+  assert.ok(
+    issues.some((i) => i.level === 'warn' && i.code === 'opening-frame-tight'),
+    `Expected opening-frame-tight warning, got ${JSON.stringify(issues)}`,
+  );
+  const resFrame = plugin.generate(pTightFrame);
+  const front = resFrame.parts.find((pt) => pt.key === 'front');
+  assert.ok(front.marks && front.marks.length > 0, 'Expected clamped frame marks on front wall');
+  const halfW = pTightFrame.width / 2;
+  const wallMinX = -halfW + pTightFrame.thickness; // inside left corner finger line
+  for (const mk of front.marks) {
+    for (const n of mk.nodes) {
+      assert.ok(
+        n.x >= wallMinX - 0.01 && n.x <= halfW - pTightFrame.thickness + 0.01,
+        `Engraved frame mark spilled past wall interior edge at x=${n.x.toFixed(2)} (minX=${wallMinX})`,
+      );
+    }
+  }
+});
+
 

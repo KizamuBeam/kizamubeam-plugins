@@ -280,56 +280,143 @@ export function wallProfile(wall: OuterWallKey, W: number, D: number, H: number,
   };
 }
 
-/** Clip a 2D line segment (p0→p1) to the interior of a convex polygon `poly` (inset by margin). Returns null if outside. */
-function clipSegmentConvex(
+/** Axis-aligned exclusion box [x0, y0, x1, y1] where roof engraving marks must not enter (e.g. tenon slots) */
+export type RoofExclusion = [number, number, number, number];
+
+function pointInPoly(x: number, y: number, poly: [number, number][]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i],
+      [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Liang-Barsky intersection of segment (x0,y0)→(x1,y1) with axis-aligned box [bx0,by0,bx1,by1]; returns [t0,t1] or null */
+function segBoxInterval(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  bx0: number,
+  by0: number,
+  bx1: number,
+  by1: number,
+): [number, number] | null {
+  let t0 = 0,
+    t1 = 1;
+  const dx = x1 - x0,
+    dy = y1 - y0;
+  const clip = (p: number, q: number): boolean => {
+    if (Math.abs(p) < 1e-12) return q >= 0;
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    } else {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    }
+    return true;
+  };
+  if (!clip(-dx, x0 - bx0) || !clip(dx, bx1 - x0) || !clip(-dy, y0 - by0) || !clip(dy, by1 - y0)) return null;
+  return t1 > t0 + 1e-6 ? [t0, t1] : null;
+}
+
+/** Subtract [cut0, cut1] from a list of [a, b] intervals */
+function subtractInterval(spans: [number, number][], cut0: number, cut1: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (const [a, b] of spans) {
+    if (cut1 <= a || cut0 >= b) out.push([a, b]);
+    else {
+      if (cut0 > a + 1e-5) out.push([a, cut0]);
+      if (cut1 < b - 1e-5) out.push([cut1, b]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Clip a 2D line segment (p0→p1) to the interior of ANY simple polygon `poly` (convex or concave L/U/C),
+ * keeping at least `margin` mm away from every polygon edge and skipping all `exclude` boxes (e.g. tenon slots).
+ */
+export function clipSegmentPoly(
   x0: number,
   y0: number,
   x1: number,
   y1: number,
   poly: [number, number][],
   margin = 0,
-): [[number, number], [number, number]] | null {
-  // Determine signed area to know winding (clockwise in y-down has negative shoelace or positive; compute inward normal)
-  let area2 = 0;
-  for (let i = 0; i < poly.length; i++) {
-    const [ax, ay] = poly[i],
-      [bx, by] = poly[(i + 1) % poly.length];
-    area2 += ax * by - bx * ay;
-  }
-  const sgn = area2 >= 0 ? 1 : -1;
-  let t0 = 0,
-    t1 = 1;
+  exclude: RoofExclusion[] = [],
+): [[number, number], [number, number]][] {
   const dx = x1 - x0,
     dy = y1 - y0;
+  const segLen = Math.hypot(dx, dy);
+  if (segLen < EPS || poly.length < 3) return [];
+
+  // 1. Intersect segment with every polygon edge to partition [0, 1] into inside/outside intervals
+  const cuts: number[] = [0, 1];
   for (let i = 0; i < poly.length; i++) {
     const [ax, ay] = poly[i],
       [bx, by] = poly[(i + 1) % poly.length];
     const ex = bx - ax,
       ey = by - ay;
-    const len = Math.hypot(ex, ey);
-    if (len < EPS) continue;
-    // Inward unit normal: for CCW (area2 > 0), inward is (-ey, ex)/len
-    const nx = (-sgn * ey) / len,
-      ny = (sgn * ex) / len;
-    const num = (x0 - ax) * nx + (y0 - ay) * ny - margin;
-    const den = -(dx * nx + dy * ny);
-    if (Math.abs(den) < 1e-12) {
-      if (num < 0) return null;
-    } else {
-      const r = num / den;
-      if (den > 0) {
-        t1 = Math.min(t1, r);
-      } else {
-        t0 = Math.max(t0, r);
-      }
-      if (t0 > t1) return null;
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-12) continue;
+    const wx = ax - x0,
+      wy = ay - y0;
+    const t = (wx * ey - wy * ex) / den;
+    const u = (wx * dy - wy * dx) / den;
+    if (t > 1e-6 && t < 1 - 1e-6 && u >= -1e-6 && u <= 1 + 1e-6) cuts.push(t);
+  }
+  cuts.sort((a, b) => a - b);
+
+  let spans: [number, number][] = [];
+  for (let i = 0; i + 1 < cuts.length; i++) {
+    const a = cuts[i],
+      b = cuts[i + 1];
+    if (b - a < 1e-5) continue;
+    const m = (a + b) / 2;
+    if (pointInPoly(x0 + m * dx, y0 + m * dy, poly)) spans.push([a, b]);
+  }
+  if (!spans.length) return [];
+
+  // 2. Subtract margin band around every polygon edge (in each edge's local frame)
+  if (margin > EPS) {
+    for (let i = 0; i < poly.length && spans.length; i++) {
+      const [ax, ay] = poly[i],
+        [bx, by] = poly[(i + 1) % poly.length];
+      const ex = bx - ax,
+        ey = by - ay;
+      const len = Math.hypot(ex, ey);
+      if (len < EPS) continue;
+      const ux = ex / len,
+        uy = ey / len;
+      const nx = -uy,
+        ny = ux;
+      const rx0 = (x0 - ax) * ux + (y0 - ay) * uy;
+      const ry0 = (x0 - ax) * nx + (y0 - ay) * ny;
+      const rx1 = (x1 - ax) * ux + (y1 - ay) * uy;
+      const ry1 = (x1 - ax) * nx + (y1 - ay) * ny;
+      const hit = segBoxInterval(rx0, ry0, rx1, ry1, -margin, -margin, len + margin, margin);
+      if (hit) spans = subtractInterval(spans, hit[0], hit[1]);
     }
   }
-  if (t1 - t0 < 1e-4) return null;
-  return [
-    [x0 + t0 * dx, y0 + t0 * dy],
-    [x0 + t1 * dx, y0 + t1 * dy],
-  ];
+
+  // 3. Subtract slot exclusion boxes
+  for (const [bx0, by0, bx1, by1] of exclude) {
+    if (!spans.length) break;
+    const hit = segBoxInterval(x0, y0, x1, y1, bx0, by0, bx1, by1);
+    if (hit) spans = subtractInterval(spans, hit[0], hit[1]);
+  }
+
+  return spans
+    .filter(([a, b]) => (b - a) * segLen >= 0.4)
+    .map(([a, b]): [[number, number], [number, number]] => [
+      [x0 + a * dx, y0 + a * dy],
+      [x0 + b * dx, y0 + b * dy],
+    ]);
 }
 
 const lineSub = (a: [number, number], b: [number, number]): SubPath => ({
@@ -337,9 +424,15 @@ const lineSub = (a: [number, number], b: [number, number]): SubPath => ({
   nodes: [{ x: a[0], y: a[1] }, { x: b[0], y: b[1] }],
 });
 
-/** Generate clipped engraved roof pattern marks (tiles, shingles, standing seams) inside a convex roof panel */
-export function roofPatternMarks(pts: [number, number][], pattern: RoofPattern, size: number, margin = 2): SubPath[] {
-  if (pattern === 'none' || size < 3) return [];
+/** Generate clipped engraved roof pattern marks (tiles, shingles, standing seams) inside any roof panel polygon */
+export function roofPatternMarks(
+  pts: [number, number][],
+  pattern: RoofPattern,
+  size: number,
+  margin = 2,
+  exclude: RoofExclusion[] = [],
+): SubPath[] {
+  if (pattern === 'none' || size < 3 || pts.length < 3) return [];
   let x0 = Infinity,
     x1 = -Infinity,
     y0 = Infinity,
@@ -351,43 +444,40 @@ export function roofPatternMarks(pts: [number, number][], pattern: RoofPattern, 
     y1 = Math.max(y1, y);
   }
   const marks: SubPath[] = [];
+  const push = (ax: number, ay: number, bx: number, by: number) => {
+    for (const seg of clipSegmentPoly(ax, ay, bx, by, pts, margin, exclude)) marks.push(lineSub(seg[0], seg[1]));
+  };
   const step = Math.max(3, size);
 
   if (pattern === 'seams') {
-    // Vertical standing-seam lines from ridge (top) to eaves (bottom), centered horizontally
     const cx = (x0 + x1) / 2;
     const count = Math.floor((x1 - x0) / (2 * step));
     for (let i = -count; i <= count; i++) {
       const x = cx + i * step;
-      const seg = clipSegmentConvex(x, y0, x, y1, pts, margin);
-      if (seg) marks.push(lineSub(seg[0], seg[1]));
+      push(x, y0, x, y1);
     }
     return marks;
   }
 
   if (pattern === 'tiles') {
-    // Horizontal course lines from eaves (y1) upward to ridge (y0), plus staggered vertical tile joints
     const courseH = step;
     const tileW = step * 0.85;
     const cx = (x0 + x1) / 2;
     let row = 0;
     for (let y = y1 - courseH; y > y0 + margin; y -= courseH, row++) {
-      const hSeg = clipSegmentConvex(x0, y, x1, y, pts, margin);
-      if (hSeg) marks.push(lineSub(hSeg[0], hSeg[1]));
+      push(x0, y, x1, y);
       const yNext = y + courseH;
       const offset = (row % 2) * (tileW / 2);
       const nCols = Math.ceil((x1 - x0) / tileW) + 1;
       for (let i = -nCols; i <= nCols; i++) {
         const x = cx + i * tileW + offset;
-        const vSeg = clipSegmentConvex(x, y, x, yNext, pts, margin);
-        if (vSeg) marks.push(lineSub(vSeg[0], vSeg[1]));
+        push(x, y, x, yNext);
       }
     }
     return marks;
   }
 
   if (pattern === 'shingles') {
-    // Staggered chevron / scalloped shingle rows from eaves upward
     const courseH = step * 0.75;
     const shW = step;
     const dip = courseH * 0.35;
@@ -400,10 +490,8 @@ export function roofPatternMarks(pts: [number, number][], pattern: RoofPattern, 
         const xa = cx + i * shW + offset;
         const xm = xa + shW / 2;
         const xb = xa + shW;
-        const s1 = clipSegmentConvex(xa, y, xm, y + dip, pts, margin);
-        const s2 = clipSegmentConvex(xm, y + dip, xb, y, pts, margin);
-        if (s1) marks.push(lineSub(s1[0], s1[1]));
-        if (s2) marks.push(lineSub(s2[0], s2[1]));
+        push(xa, y, xm, y + dip);
+        push(xm, y + dip, xb, y);
       }
     }
     return marks;

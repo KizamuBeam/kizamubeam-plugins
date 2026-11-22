@@ -208,9 +208,9 @@ function compute(p: P) {
     }
   }
 
-  // Validate openings against wall silhouettes, joints & overlaps
+  // Validate openings against wall silhouettes, joints, overlaps & engraved frame clearance
   const hosts = houseWallHosts(box.model, db);
-  issues.push(...validateOpenings(openings, hosts, db.t, db.mullionWidth));
+  issues.push(...validateOpenings(openings, hosts, db.t, db.mullionWidth, db.engraveFrames, db.frameWidth));
 
   if (issues.some((i) => i.level === 'error')) return { issues, d: db, material, built: null, m, box, openings };
 
@@ -369,25 +369,38 @@ function highlightPart(p: P, ctx: HouseSurfaceCtx, s: { view: string; state: unk
   return out;
 }
 
-/** Width or depth changed: ask whether inner walls & openings scale with the house or keep their distances in mm */
+/** Width, depth, or height changed: ask whether inner walls & openings scale proportionally or keep mm sizes */
 function resized(key: string, old: unknown, p: P) {
-  if ((key !== 'width' && key !== 'depth') || typeof old !== 'number') return null;
+  if ((key !== 'width' && key !== 'depth' && key !== 'height') || typeof old !== 'number') return null;
   const t = p.thickness;
   const oW = key === 'width' ? old : p.width;
   const oD = key === 'depth' ? old : p.depth;
+  const oH = key === 'height' ? old : p.height;
   const nW = p.width;
   const nD = p.depth;
+  const nH = p.height;
   const ow = oW - 2 * t,
     od = oD - 2 * t,
     nw = nW - 2 * t,
     nd = nD - 2 * t;
-  if (!(ow > 0 && od > 0 && nw > 0 && nd > 0) || (Math.abs(ow - nw) < 1e-9 && Math.abs(od - nd) < 1e-9)) return null;
+  const changedPlan = Math.abs(ow - nw) >= 1e-9 || Math.abs(od - nd) >= 1e-9;
+  const changedH = Math.abs(oH - nH) >= 1e-9;
+  if (!(ow > 0 && od > 0 && nw > 0 && nd > 0 && oH > 0 && nH > 0) || (!changedPlan && !changedH)) return null;
 
   const l = layoutOf(p, ow, od);
   const m = l && buildModel(l, ow, od, limits(t));
-  const hasWalls = !!(l && m && !(m.box && isRect(m.box.pts) && !m.box.model.walls.length));
+  const hasWalls = !!(changedPlan && l && m && !(m.box && isRect(m.box.pts) && !m.box.model.walls.length));
   const ops = readOpenings(p.openings) ?? [];
   if (!hasWalls && !ops.length) return null;
+
+  const innerAxes = new Map<number, 'h' | 'v'>();
+  if (m?.box) {
+    for (const wi of m.box.model.walls) {
+      innerAxes.set(wi.wall.id, wi.wall.axis);
+      const srcId = m.box.src.get(wi.wall.id);
+      if (srcId !== undefined) innerAxes.set(srcId, wi.wall.axis);
+    }
+  }
 
   const scaledPatch: Record<string, string> = {};
   const keptPatch: Record<string, string> = {};
@@ -397,7 +410,7 @@ function resized(key: string, old: unknown, p: P) {
     Object.assign(keptPatch, writeLayout({ ref: [nw, nd], walls: keepWalls(walls, ow, od, nw, nd) }));
   }
   if (ops.length) {
-    scaledPatch.openings = writeOpenings(scaleOpenings(ops, oW, oD, nW, nD));
+    scaledPatch.openings = writeOpenings(scaleOpenings(ops, oW, oD, nW, nD, oH, nH, innerAxes, !!p.floor, t));
   }
   return {
     ask: {
@@ -435,7 +448,7 @@ function sideToggled(side: Side, p: P) {
 
 definePlugin<P>({
   onChange({ key, old, params }): Change | null {
-    if (key === 'width' || key === 'depth') return resized(key, old, params);
+    if (key === 'width' || key === 'depth' || key === 'height') return resized(key, old, params);
     if (key in SIDE_KEYS) return sideToggled(SIDE_KEYS[key], params);
     // Keep roof angle & height in sync when switching roofSizeMode
     if (key === 'roofSizeMode' && typeof old === 'string') {

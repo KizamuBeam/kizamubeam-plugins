@@ -53,6 +53,8 @@ export interface WallHost {
   marginRight: number;
   /** Whether top edge has roof/lid joints requiring extra margin */
   topJointMargin: number;
+  /** Built horizontal stretches in exterior coords (for shaped L/U/C outer walls; undefined = full [0, width]) */
+  spans?: [number, number][];
 }
 
 export const MAX_OPENINGS = 80;
@@ -177,14 +179,46 @@ export function writeOpenings(list: Opening[]): string {
   );
 }
 
-/** Scale opening horizontal positions (and optionally sizes) proportionally when house W or D changes */
-export function scaleOpenings(list: Opening[], oldW: number, oldD: number, newW: number, newD: number): Opening[] {
+/**
+ * Scale opening positions and sizes proportionally when house width, depth or height changes.
+ * Also scales openings on interior walls (`wall-<id>`) along their axis.
+ */
+export function scaleOpenings(
+  list: Opening[],
+  oldW: number,
+  oldD: number,
+  newW: number,
+  newD: number,
+  oldH = 0,
+  newH = 0,
+  innerAxes?: Map<number, 'h' | 'v'>,
+  floor = true,
+  t = 3,
+): Opening[] {
   const sx = oldW > 0 ? newW / oldW : 1;
   const sy = oldD > 0 ? newD / oldD : 1;
+  const sillZ = sillBaseZ(floor, t);
+  const oldClear = oldH > sillZ + 4 ? oldH - sillZ : oldH;
+  const newClear = newH > sillZ + 4 ? newH - sillZ : newH;
+  const sh = oldH > 0 && newH > 0 && oldClear > 0 ? newClear / oldClear : 1;
+  const scaleH = Math.abs(sh - 1) > 1e-6;
+
   return list.map((o) => {
-    if (o.wall === 'front' || o.wall === 'back') return { ...o, x: r2(o.x * sx) };
-    if (o.wall === 'left' || o.wall === 'right') return { ...o, x: r2(o.x * sy) };
-    return { ...o };
+    let alongScale = 1;
+    if (o.wall === 'front' || o.wall === 'back') alongScale = sx;
+    else if (o.wall === 'left' || o.wall === 'right') alongScale = sy;
+    else {
+      const m = /^wall-(\d+)$/.exec(o.wall);
+      const ax = m && innerAxes ? innerAxes.get(Number(m[1])) : undefined;
+      if (ax === 'h') alongScale = sx;
+      else if (ax === 'v') alongScale = sy;
+    }
+    const scaleX = Math.abs(alongScale - 1) > 1e-6;
+    return {
+      ...o,
+      ...(scaleX ? { x: r2(o.x * alongScale), w: r2(Math.max(4, o.w * alongScale)) } : {}),
+      ...(scaleH ? { y: o.y > 0.01 ? r2(Math.max(0, o.y * sh)) : 0, h: r2(Math.max(4, o.h * sh)) } : {}),
+    };
   });
 }
 
@@ -202,6 +236,7 @@ export function outerWallHost(
   hasRightAdj: boolean,
   topJointMargin: number,
   jointXs: number[],
+  spans?: [number, number][],
 ): WallHost {
   return {
     key: profile.wall,
@@ -214,6 +249,7 @@ export function outerWallHost(
     marginLeft: hasLeftAdj ? t : 0,
     marginRight: hasRightAdj ? t : 0,
     topJointMargin,
+    ...(spans ? { spans } : {}),
   };
 }
 
@@ -237,8 +273,78 @@ function openingTopNeededZ(op: Opening, xSample: number, sillZ: number): number 
   return sillZ + op.y + op.h;
 }
 
-/** Validate all openings against their host walls, roof silhouettes, joints, and overlaps */
-export function validateOpenings(openings: Opening[], hosts: Map<string, WallHost>, t: number, mullionW: number): OpeningIssue[] {
+/**
+ * Maximum safe engraved frame width around `op` so the frame stays strictly inside its wall's wood area,
+ * clear of corner joints, roof edges, T-wall slots, and neighboring openings' frames.
+ */
+export function safeFrameWidth(op: Opening, host: WallHost, others: Opening[], requested: number, t: number): number {
+  if (requested <= 0.2) return 0;
+  const xL = op.x - op.w / 2;
+  const xR = op.x + op.w / 2;
+  // Exact outer overhang multipliers matching openingMarks() (window sill = 1.4x wide / 1.3x below; double door header = 1.5x / 1.6x)
+  const multsOf = (o: Opening) => ({
+    x: o.style === 'round' ? 1 : o.kind !== 'door' ? 1.4 : o.style === 'double' ? 1.5 : 1,
+    top: o.kind === 'door' && o.style === 'double' ? 1.6 : 1,
+    bot: o.kind === 'door' ? 0 : o.style === 'round' || o.style === 'arch' ? 1 : 1.3,
+  });
+  const m = multsOf(op);
+
+  // Determine enclosing built span
+  let s0 = host.marginLeft;
+  let s1 = host.width - host.marginRight;
+  if (host.spans?.length) {
+    const sp = host.spans.find(([a, b]) => xL >= a - 0.01 && xR <= b + 0.01);
+    if (sp) {
+      s0 = sp[0] + t;
+      s1 = sp[1] - t;
+    }
+  }
+  const pad = 0.4;
+  let maxF = requested;
+  // Horizontal clearance to wall edges / corner fingers
+  maxF = Math.min(maxF, Math.max(0, (xL - s0 - pad) / m.x), Math.max(0, (s1 - xR - pad) / m.x));
+  // Bottom clearance
+  if (m.bot > 0) {
+    const availBot = host.sillZ - host.floorZ + op.y - pad;
+    maxF = Math.min(maxF, Math.max(0, availBot / m.bot));
+  }
+  // Top clearance against wall profile (roofline / top joint)
+  for (let i = 0; i <= 6; i++) {
+    const sx = xL + (op.w * i) / 6;
+    const topSpace = host.zAt(sx) - host.topJointMargin - openingTopNeededZ(op, sx, host.sillZ) - pad;
+    maxF = Math.min(maxF, Math.max(0, topSpace / m.top));
+  }
+  // Clearance from interior wall T-joints
+  for (const jx of host.jointXs) {
+    if (jx <= xL) maxF = Math.min(maxF, Math.max(0, (xL - (jx + t / 2) - pad) / m.x));
+    else if (jx >= xR) maxF = Math.min(maxF, Math.max(0, (jx - t / 2 - xR - pad) / m.x));
+  }
+  // Clearance to neighboring openings on the same wall
+  for (const o of others) {
+    if (o.id === op.id) continue;
+    const om = multsOf(o);
+    const gapX = Math.max(xL - (o.x + o.w / 2), o.x - o.w / 2 - xR);
+    const gapY = Math.max(op.y - (o.y + o.h), o.y - (op.y + op.h));
+    if (gapY < requested * (m.top + om.bot + 0.5) && gapX >= 0) {
+      maxF = Math.min(maxF, Math.max(0, (gapX - pad) / (m.x + om.x)));
+    }
+    if (gapX < requested * (m.x + om.x + 0.5) && gapY >= 0) {
+      const vSum = op.y >= o.y + o.h ? m.bot + om.top : m.top + om.bot;
+      if (vSum > 0) maxF = Math.min(maxF, Math.max(0, (gapY - pad) / vSum));
+    }
+  }
+  return maxF >= 0.4 ? r2(maxF) : 0;
+}
+
+/** Validate all openings against their host walls, roof silhouettes, joints, overlaps, and optional engraved frames */
+export function validateOpenings(
+  openings: Opening[],
+  hosts: Map<string, WallHost>,
+  t: number,
+  mullionW: number,
+  engraveFrames = false,
+  frameW = 0,
+): OpeningIssue[] {
   const issues: OpeningIssue[] = [];
   const web = webMin(t);
   const byWall = new Map<string, Opening[]>();
@@ -269,14 +375,22 @@ export function validateOpenings(openings: Opening[], hosts: Map<string, WallHos
       }
     }
 
-    // Horizontal clearance from wall side edges (including corner finger joints)
+    // Horizontal clearance from wall side edges (or actual built spans on shaped L/U/C footprints)
     const xL = op.x - op.w / 2;
     const xR = op.x + op.w / 2;
-    const minL = host.marginLeft + web;
-    const maxR = host.width - host.marginRight - web;
-    if (xL < minL - 0.01 || xR > maxR + 0.01) {
-      issues.push({ key: 'openings', level: 'error', code: 'opening-outside', values: { id: op.id } });
-      continue;
+    if (host.spans) {
+      const fitsSpan = host.spans.some(([a, b]) => xL >= a + t + web - 0.01 && xR <= b - t - web + 0.01);
+      if (!fitsSpan) {
+        issues.push({ key: 'openings', level: 'error', code: 'opening-outside', values: { id: op.id } });
+        continue;
+      }
+    } else {
+      const minL = host.marginLeft + web;
+      const maxR = host.width - host.marginRight - web;
+      if (xL < minL - 0.01 || xR > maxR + 0.01) {
+        issues.push({ key: 'openings', level: 'error', code: 'opening-outside', values: { id: op.id } });
+        continue;
+      }
     }
 
     // Bottom clearance: y >= 0 sits on sillZ (solid threshold above floor joint when floor is on, or bottom edge when off)
@@ -312,8 +426,9 @@ export function validateOpenings(openings: Opening[], hosts: Map<string, WallHos
     }
   }
 
-  // Pairwise overlap / thin-web check on the same wall
-  for (const list of byWall.values()) {
+  // Pairwise overlap / thin-web check + engraved frame clearance warning on the same wall
+  for (const [wk, list] of byWall.entries()) {
+    const host = hosts.get(wk)!;
     for (let i = 0; i < list.length; i++) {
       for (let j = i + 1; j < list.length; j++) {
         const a = list[i],
@@ -322,6 +437,12 @@ export function validateOpenings(openings: Opening[], hosts: Map<string, WallHos
         const gapY = Math.max(a.y - (b.y + b.h), b.y - (a.y + a.h));
         if (gapX < web - 0.01 && gapY < web - 0.01) {
           issues.push({ key: 'openings', level: 'error', code: 'openings-overlap', values: { id: a.id, id2: b.id, min: web } });
+        }
+      }
+      if (engraveFrames && frameW > 0.2) {
+        const safe = safeFrameWidth(list[i], host, list, frameW, t);
+        if (safe < frameW - 0.05) {
+          issues.push({ key: 'frameWidth', level: 'warn', code: 'opening-frame-tight', values: { id: list[i].id } });
         }
       }
     }
