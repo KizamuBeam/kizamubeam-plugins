@@ -331,6 +331,7 @@ export function duplicateOpeningOnWall(
   existing: Opening[],
   t: number,
   mullionW: number,
+  midFloorZ?: number,
 ): Opening | null {
   const web = webMin(t);
   const step = source.w + Math.max(web + 2, 2 * t);
@@ -349,7 +350,7 @@ export function duplicateOpeningOnWall(
   const newId = nextOpeningId(existing);
   for (const x of cands) {
     const cand: Opening = { ...source, id: newId, x };
-    const errs = validateOpenings([...wallOps, cand], hostsMap, t, mullionW).filter((i) => i.level === 'error');
+    const errs = validateOpenings([...wallOps, cand], hostsMap, t, mullionW, false, 0, midFloorZ).filter((i) => i.level === 'error');
     if (!errs.length) return cand;
   }
   return null;
@@ -954,10 +955,15 @@ export function findOpeningSpot(
   kind: OpeningKind,
   t: number,
   mullionW: number,
+  midFloorZ?: number,
 ): Opening | null {
   const web = webMin(t);
   const availW = host.width - host.marginLeft - host.marginRight - 2 * web;
-  const clearH = host.zAt(host.width / 2) - host.sillZ - host.topJointMargin - web;
+  const ceilingZ =
+    midFloorZ !== undefined && !host.key.startsWith('wall-')
+      ? Math.min(host.zAt(host.width / 2) - host.topJointMargin, midFloorZ)
+      : host.zAt(host.width / 2) - host.topJointMargin;
+  const clearH = ceilingZ - host.sillZ - web;
   if (availW < 6 || clearH < 6) return null;
 
   const isDoor = kind === 'door';
@@ -982,8 +988,23 @@ export function findOpeningSpot(
 
   for (const x of cands) {
     const cand: Opening = { id: nextOpeningId(existing), wall: host.key, kind, style, x, y, w, h };
-    const errs = validateOpenings([...wallOps, cand], hostsMap, t, mullionW).filter((i) => i.level === 'error');
+    const errs = validateOpenings([...wallOps, cand], hostsMap, t, mullionW, false, 0, midFloorZ).filter((i) => i.level === 'error');
     if (!errs.length) return cand;
+  }
+
+  // On 2-story houses, if ground floor is full for windows, try placing a window on the upper story!
+  if (!isDoor && midFloorZ !== undefined && !host.key.startsWith('wall-')) {
+    const upFloorZ = midFloorZ + t + web;
+    const upClearH = host.zAt(host.width / 2) - host.topJointMargin - web - upFloorZ;
+    if (upClearH >= 10) {
+      const uh = r2(Math.min(20, Math.max(8, upClearH * 0.55)));
+      const uy = r2(upFloorZ - host.sillZ + Math.max(2, (upClearH - uh) * 0.35));
+      for (const x of cands) {
+        const cand: Opening = { id: nextOpeningId(existing), wall: host.key, kind, style, x, y: uy, w, h: uh };
+        const errs = validateOpenings([...wallOps, cand], hostsMap, t, mullionW, false, 0, midFloorZ).filter((i) => i.level === 'error');
+        if (!errs.length) return cand;
+      }
+    }
   }
 
   // Fallback: place at center with smaller size if crowded
@@ -992,7 +1013,7 @@ export function findOpeningSpot(
   const sy = isDoor ? 0 : r2(Math.max(2, (clearH - sh) / 2));
   for (const x of cands) {
     const cand: Opening = { id: nextOpeningId(existing), wall: host.key, kind, style: 'rect', x, y: sy, w: sw, h: sh };
-    const errs = validateOpenings([...wallOps, cand], hostsMap, t, mullionW).filter((i) => i.level === 'error');
+    const errs = validateOpenings([...wallOps, cand], hostsMap, t, mullionW, false, 0, midFloorZ).filter((i) => i.level === 'error');
     if (!errs.length) return cand;
   }
 

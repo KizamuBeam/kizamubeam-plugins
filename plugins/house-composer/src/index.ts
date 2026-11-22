@@ -555,7 +555,7 @@ definePlugin<P>({
         (['front', 'back', 'left', 'right'].find((k) => ctx.hosts.has(k)) ?? [...ctx.hosts.keys()][0]);
       const hostWall = target ? ctx.hosts.get(target) : undefined;
       if (!hostWall) return { message: { code: 'elev.wall-off' } };
-      const added = findOpeningSpot(hostWall, ops, action === 'addDoor' ? 'door' : 'window', ctx.t, ctx.mullionWidth);
+      const added = findOpeningSpot(hostWall, ops, action === 'addDoor' ? 'door' : 'window', ctx.t, ctx.mullionWidth, ctx.midFloorZ);
       if (!added) return { message: { code: 'opening-no-space' } };
       const next = [...ops, added];
       const targetView = added.wall.startsWith('wall-') ? 'inner' : added.wall;
@@ -638,7 +638,7 @@ definePlugin<P>({
       const cur = ops[row];
       const hostWall = ctx.hosts.get(cur.wall);
       if (!hostWall) return { message: { code: 'elev.wall-off' } };
-      const dup = duplicateOpeningOnWall(cur, hostWall, ops, ctx.t, ctx.mullionWidth);
+      const dup = duplicateOpeningOnWall(cur, hostWall, ops, ctx.t, ctx.mullionWidth, ctx.midFloorZ);
       if (!dup) return { message: { code: 'opening-no-space' } };
       const next = [...ops, dup];
       return {

@@ -1800,6 +1800,162 @@ test('Shaped L/U 3: L-shape supports midFloor, chimney, 3D cutout trim frames, p
   }
 });
 
+test('Step 3 (Plan & Views): add, edit, and remove doors & windows directly from Plan and Elevation views', () => {
+  const { plugin } = loadPlugin();
+  const base = defaultParams();
+
+  // 1. Plan view renders + Door, + Window toolbar pills and clickable planop:<id> symbols ON TOP of walls
+  const plan = plugin.draw({ view: 'plan', state: null, selected: { openings: -1, walls: -1 }, have: [], params: base });
+  const lastWallIdx = plan.items.reduce((mx, it, i) => (it.id && /^w\d+$/.test(it.id) ? i : mx), -1);
+  const firstPlanOpIdx = plan.items.findIndex((it) => it.id === 'planop:1');
+  assert.ok(lastWallIdx >= 0, 'Expected wall items in Plan view');
+  assert.ok(firstPlanOpIdx > lastWallIdx, 'Expected clickable planop:1 to render AFTER walls for hit priority');
+  assert.ok(plan.items.some((it) => it.id === 'tool:addDoor'), 'Expected + Door toolbar pill in Plan view');
+  assert.ok(plan.items.some((it) => it.id === 'tool:addWindow'), 'Expected + Window toolbar pill in Plan view');
+
+  // 2. Clicking planop:4 (on back wall) in Plan view jumps directly to back elevation with opening #4 selected
+  const jumpBack = plugin.onSurface({
+    event: { type: 'down', x: 30, y: -1.5, hit: 'planop:4' },
+    surface: { view: 'plan', state: null, selected: { openings: -1, walls: -1 } },
+    params: base,
+  });
+  assert.equal(jumpBack?.view, 'back');
+  assert.equal(jumpBack?.state?.selId, 4);
+
+  // 3. Right-clicking planop:4 in Plan view removes opening #4 immediately
+  const delFromPlan = plugin.onSurface({
+    event: { type: 'context', x: 30, y: -1.5, hit: 'planop:4' },
+    surface: { view: 'plan', state: null, selected: { openings: -1, walls: -1 } },
+    params: base,
+  });
+  const afterPlanDel = JSON.parse(delFromPlan.patch.openings);
+  assert.ok(!afterPlanDel.some((o) => o.id === 4), 'Expected right-click on planop:4 to delete opening #4');
+
+  // 4. Clicking + Window in Plan view with an interior wall selected creates a window on that wall & switches to 'inner' view
+  const withInner = {
+    ...base,
+    walls: JSON.stringify([{ id: 1, axis: 'v', pos: 57, from: 0, to: 84 }]),
+    wallsRef: JSON.stringify([114, 84]),
+    openings: '[]',
+  };
+  const addOnInner = plugin.onSurface({
+    event: { type: 'down', x: 57, y: -30, hit: 'tool:addWindow' },
+    surface: { view: 'plan', state: null, selected: { openings: -1, walls: 0 } },
+    params: withInner,
+  });
+  assert.equal(addOnInner?.view, 'inner');
+  assert.equal(addOnInner?.state?.wallKey, 'wall-1');
+  const innerOps = JSON.parse(addOnInner.patch.openings);
+  assert.equal(innerOps.length, 1);
+  assert.equal(innerOps[0].wall, 'wall-1');
+  assert.equal(innerOps[0].kind, 'window');
+
+  // 5. Clicking + Door in Plan view with no wall selected adds a door on 'front' and switches to 'front' elevation
+  let p = { ...base, openings: '[]' };
+  const addDoorPlan = plugin.onSurface({
+    event: { type: 'down', x: 57, y: -30, hit: 'tool:addDoor' },
+    surface: { view: 'plan', state: null, selected: { openings: -1, walls: -1 } },
+    params: p,
+  });
+  assert.equal(addDoorPlan?.view, 'front');
+  p = { ...p, ...addDoorPlan.patch };
+  let ops = JSON.parse(p.openings);
+  assert.equal(ops.length, 1);
+  assert.equal(ops[0].wall, 'front');
+  assert.equal(ops[0].kind, 'door');
+  const selState = addDoorPlan.state;
+  const selList = { openings: 0, walls: -1 };
+
+  // 6. Elevation view with a selected opening renders all 8 toolbar pills
+  const elev = plugin.draw({ view: 'front', state: selState, selected: selList, have: [], params: p });
+  for (const tid of ['tool:addDoor', 'tool:addWindow', 'tool:duplicate', 'tool:delete', 'tool:toggleKind', 'tool:cycleStyle', 'tool:center', 'tool:mirror']) {
+    assert.ok(elev.items.some((it) => it.id === tid), `Expected toolbar pill ${tid} in elevation view`);
+  }
+
+  // 7. Toggle Door -> Window via toolbar
+  const toggled = plugin.onSurface({
+    event: { type: 'down', x: 20, y: -15, hit: 'tool:toggleKind' },
+    surface: { view: 'front', state: selState, selected: selList },
+    params: p,
+  });
+  p = { ...p, ...toggled.patch };
+  ops = JSON.parse(p.openings);
+  assert.equal(ops[0].kind, 'window');
+  assert.ok(ops[0].y > 0, 'Converting door to window should lift sill above floor');
+
+  // 8. Cycle Style via toolbar (rect -> arch)
+  const styled = plugin.onSurface({
+    event: { type: 'down', x: 50, y: -15, hit: 'tool:cycleStyle' },
+    surface: { view: 'front', state: toggled.state, selected: selList },
+    params: p,
+  });
+  p = { ...p, ...styled.patch };
+  ops = JSON.parse(p.openings);
+  assert.equal(ops[0].style, 'arch');
+
+  // 9. Move off-center via field, then Mirror, then Center via toolbar
+  const movedField = plugin.onSurface({
+    event: { type: 'field', field: 'ox', value: 30, x: 0, y: 0 },
+    surface: { view: 'front', state: styled.state, selected: selList },
+    params: p,
+  });
+  p = { ...p, ...movedField.patch };
+  assert.equal(JSON.parse(p.openings)[0].x, 30);
+
+  const mirrored = plugin.onSurface({
+    event: { type: 'down', x: 100, y: -15, hit: 'tool:mirror' },
+    surface: { view: 'front', state: movedField.state, selected: selList },
+    params: p,
+  });
+  p = { ...p, ...mirrored.patch };
+  assert.equal(JSON.parse(p.openings)[0].x, 90);
+
+  const centered = plugin.onSurface({
+    event: { type: 'down', x: 80, y: -15, hit: 'tool:center' },
+    surface: { view: 'front', state: mirrored.state, selected: selList },
+    params: p,
+  });
+  p = { ...p, ...centered.patch };
+  assert.equal(JSON.parse(p.openings)[0].x, 60);
+
+  // 10. Duplicate & Add Window via elevation toolbar, then Delete via toolbar
+  const duped = plugin.onSurface({
+    event: { type: 'down', x: 80, y: -25, hit: 'tool:duplicate' },
+    surface: { view: 'front', state: centered.state, selected: selList },
+    params: p,
+  });
+  p = { ...p, ...duped.patch };
+  assert.equal(JSON.parse(p.openings).length, 2);
+
+  const addedWin = plugin.onSurface({
+    event: { type: 'down', x: 50, y: -25, hit: 'tool:addWindow' },
+    surface: { view: 'front', state: duped.state, selected: { openings: 1, walls: -1 } },
+    params: p,
+  });
+  p = { ...p, ...addedWin.patch };
+  assert.equal(JSON.parse(p.openings).length, 3);
+  assert.equal(plugin.validate(p).filter((i) => i.level === 'error').length, 0);
+
+  const deleted = plugin.onSurface({
+    event: { type: 'down', x: 110, y: -25, hit: 'tool:delete' },
+    surface: { view: 'front', state: addedWin.state, selected: { openings: 2, walls: -1 } },
+    params: p,
+  });
+  p = { ...p, ...deleted.patch };
+  assert.equal(JSON.parse(p.openings).length, 2);
+
+  // 11. Two-story house: toolbar + Door respects midFloorZ without colliding with intermediate floor
+  const p2 = { ...base, height: 110, midFloor: true, midFloorHeight: 54, openings: '[]' };
+  const add2 = plugin.onSurface({
+    event: { type: 'down', x: 30, y: -25, hit: 'tool:addDoor' },
+    surface: { view: 'front', state: null, selected: { openings: -1, walls: -1 } },
+    params: p2,
+  });
+  const p2Next = { ...p2, ...add2.patch };
+  const errs2 = plugin.validate(p2Next).filter((i) => i.level === 'error');
+  assert.equal(errs2.length, 0, `2-story toolbar + Door failed validation: ${JSON.stringify(errs2)}`);
+});
+
 
 
 
