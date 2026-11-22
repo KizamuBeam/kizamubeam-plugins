@@ -576,10 +576,10 @@ test('interactive surface: all 6 views draw, elevation edits, actions, and onCha
   assert.equal(vw.rows.openings.length, 7);
 });
 
-test('shaped L-footprint works cleanly with flat roof and rejects pitched roof', () => {
+test('shaped L-footprint works cleanly with flat and pitched roofs', () => {
   const { plugin } = loadPlugin();
   const base = defaultParams();
-  // L-shaped outer contour (6 edges, notch cut at top-right corner)
+  // L-shaped outer contour (6 edges, notch cut at back-right corner)
   const t = 3,
     w = 114,
     d = 84;
@@ -605,9 +605,13 @@ test('shaped L-footprint works cleanly with flat roof and rejects pitched roof',
   assert.ok(res.parts.some((pt) => pt.key === 'roof'));
   assert.ok(res.parts.some((pt) => pt.key === 'floor'));
 
-  // Same L-shape with gable roof should produce roof-needs-rect error
-  const pGable = { ...pFlat, roofType: 'gable' };
-  assert.ok(plugin.validate(pGable).some((i) => i.code === 'roof-needs-rect'));
+  // Same L-shape with gable roof now succeeds cleanly with dual-plane roof panels and zero errors!
+  const pGable = { ...pFlat, roofType: 'gable', roofGableOverhang: 6 };
+  const gableErrs = plugin.validate(pGable).filter((i) => i.level === 'error');
+  assert.equal(gableErrs.length, 0, `Shaped gable house failed: ${JSON.stringify(gableErrs)}`);
+  const gRes = plugin.generate(pGable);
+  assert.ok(gRes.parts.some((pt) => pt.key === 'roof-front'));
+  assert.ok(gRes.parts.some((pt) => pt.key === 'roof-back'));
 });
 
 test('3D alignment: every roof tenon edge lines up with its roof slot guide in 3D space', () => {
@@ -1519,6 +1523,283 @@ test('Block 4.3: separate 3D cutout trim frames generate valid exterior overlays
     if (op.wall === 'right') assert.equal(pose.o[0], p.width);
   }
 });
+
+test('Shaped L/U 1: L-shaped house builds cleanly across all 5 roof types, directions, mounts, and steep angles', () => {
+  const base = defaultParams();
+  const t = 3,
+    w = 114,
+    d = 84;
+  // Asymmetric L-shape (6 outer edges, notch in back-right [57..115.5] × [-1.5..42])
+  const lWalls = [
+    { id: 1, axis: 'h', pos: -t / 2, from: -t / 2, to: w / 2 },
+    { id: 2, axis: 'v', pos: w / 2, from: -t / 2, to: d / 2 },
+    { id: 3, axis: 'h', pos: d / 2, from: w / 2, to: w + t / 2 },
+    { id: 4, axis: 'v', pos: w + t / 2, from: d / 2, to: d + t / 2 },
+    { id: 5, axis: 'h', pos: d + t / 2, from: -t / 2, to: w + t / 2 },
+    { id: 6, axis: 'v', pos: -t / 2, from: -t / 2, to: d + t / 2 },
+  ];
+  const baseL = {
+    ...base,
+    walls: JSON.stringify(lWalls),
+    wallsRef: JSON.stringify([w, d]),
+    openings: '[]',
+    roofPattern: 'tiles',
+    roofPatternSize: 9,
+  };
+
+  const cases = [
+    { roofType: 'flat', roofOverhang: 0, roofMount: 'fixed' },
+    { roofType: 'flat', roofOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'flat', roofOverhang: 6, roofMount: 'removable' },
+    { roofType: 'shed', shedDir: 'front', roofAngle: 25, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'shed', shedDir: 'back', roofAngle: 25, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'shed', shedDir: 'left', roofAngle: 25, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'shed', shedDir: 'right', roofAngle: 25, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'shed', shedDir: 'front', roofAngle: 22, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'removable' },
+    { roofType: 'gable', ridgeAxis: 'x', roofAngle: 35, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'gable', ridgeAxis: 'y', roofAngle: 35, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'gable', ridgeAxis: 'x', roofAngle: 35, roofOverhang: 6, roofGableOverhang: 0, roofMount: 'fixed' },
+    { roofType: 'gable', ridgeAxis: 'x', roofAngle: 64, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'gable', ridgeAxis: 'x', roofAngle: 35, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'removable' },
+    { roofType: 'hip', roofAngle: 35, roofOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'hip', roofSizeMode: 'height', roofHeight: 28, roofOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'hip', roofAngle: 35, roofOverhang: 6, roofMount: 'removable' },
+    { roofType: 'pyramid', roofAngle: 35, roofOverhang: 6, roofMount: 'fixed' },
+  ];
+
+  for (const c of cases) {
+    const { plugin } = loadPlugin();
+    const p = { ...baseL, ...c };
+    const issues = plugin.validate(p);
+    const errs = issues.filter((i) => i.level === 'error');
+    assert.equal(errs.length, 0, `L-shape ${JSON.stringify(c)} failed validation: ${JSON.stringify(errs)}`);
+    if (c.roofType === 'pyramid') {
+      assert.ok(issues.some((i) => i.level === 'warn' && i.code === 'roof-pyramid-shaped'), 'Expected non-blocking pyramid warning on L-shape');
+    }
+    const res = plugin.generate(p);
+    const roofParts = res.parts.filter((pt) => pt.key === 'roof' || (pt.key.startsWith('roof-') && !pt.key.startsWith('roof-truss') && !pt.key.startsWith('roof-rail')));
+    assert.ok(roofParts.length >= 1, `Missing roof panels for L-shape ${JSON.stringify(c)}`);
+    for (const rp of roofParts) {
+      assert.ok(res.poses.poses[rp.key], `Missing 3D pose for ${rp.key} in L-shape ${JSON.stringify(c)}`);
+    }
+    if (c.roofType === 'hip' || c.roofType === 'pyramid') {
+      assert.equal(roofParts.length, 6, `Expected 6 straight-skeleton hip panels on L-shape, got ${roofParts.length}`);
+      assert.ok(res.parts.some((pt) => pt.key.startsWith('roof-truss')), 'Expected internal trusses for L-shape hip roof');
+    }
+    if ((c.roofType === 'flat' || c.roofType === 'shed') && c.roofMount === 'removable') {
+      assert.ok(res.parts.some((pt) => pt.key.startsWith('roof-rail')), `Expected stop rails for removable L-shape ${c.roofType}`);
+    }
+  }
+});
+
+test('Shaped L/U 2: U-shaped house builds cleanly across all 5 roof types and catches narrow-courtyard overhangs', () => {
+  const base = defaultParams();
+  const t = 3,
+    w = 134,
+    d = 94;
+  // U-shape with front courtyard (8 outer edges: left wing 0..38, courtyard 38..96 × 48..95.5, right wing 96..135.5)
+  const uWalls = [
+    { id: 1, axis: 'h', pos: -t / 2, from: -t / 2, to: w + t / 2 },
+    { id: 2, axis: 'v', pos: w + t / 2, from: -t / 2, to: d + t / 2 },
+    { id: 3, axis: 'h', pos: d + t / 2, from: 96, to: w + t / 2 },
+    { id: 4, axis: 'v', pos: 96, from: 48, to: d + t / 2 },
+    { id: 5, axis: 'h', pos: 48, from: 38, to: 96 },
+    { id: 6, axis: 'v', pos: 38, from: 48, to: d + t / 2 },
+    { id: 7, axis: 'h', pos: d + t / 2, from: -t / 2, to: 38 },
+    { id: 8, axis: 'v', pos: -t / 2, from: -t / 2, to: d + t / 2 },
+  ];
+  const baseU = {
+    ...base,
+    width: w + 2 * t,
+    depth: d + 2 * t,
+    walls: JSON.stringify(uWalls),
+    wallsRef: JSON.stringify([w, d]),
+    openings: '[]',
+    roofPattern: 'tiles',
+    roofPatternSize: 9,
+  };
+
+  const cases = [
+    { roofType: 'flat', roofOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'flat', roofOverhang: 6, roofMount: 'removable' },
+    { roofType: 'shed', shedDir: 'front', roofAngle: 22, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'shed', shedDir: 'back', roofAngle: 22, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'shed', shedDir: 'left', roofAngle: 22, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'shed', shedDir: 'right', roofAngle: 22, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'gable', ridgeAxis: 'x', roofAngle: 35, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'gable', ridgeAxis: 'y', roofAngle: 35, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'gable', ridgeAxis: 'x', roofAngle: 35, roofOverhang: 6, roofGableOverhang: 6, roofMount: 'removable' },
+    { roofType: 'hip', roofAngle: 35, roofOverhang: 6, roofMount: 'fixed' },
+    { roofType: 'pyramid', roofAngle: 35, roofOverhang: 6, roofMount: 'fixed' },
+  ];
+
+  for (const c of cases) {
+    const { plugin } = loadPlugin();
+    const p = { ...baseU, ...c };
+    const errs = plugin.validate(p).filter((i) => i.level === 'error');
+    assert.equal(errs.length, 0, `U-shape ${JSON.stringify(c)} failed validation: ${JSON.stringify(errs)}`);
+    const res = plugin.generate(p);
+    const roofParts = res.parts.filter((pt) => pt.key === 'roof' || (pt.key.startsWith('roof-') && !pt.key.startsWith('roof-truss') && !pt.key.startsWith('roof-rail')));
+    if (c.roofType === 'gable' && c.ridgeAxis === 'x') {
+      assert.ok(roofParts.some((pt) => pt.key.startsWith('roof-front')), 'Expected U-shape front gable panel(s)');
+      assert.ok(roofParts.some((pt) => pt.key === 'roof-back'), 'Expected continuous U-shape back gable panel');
+    }
+    if (c.roofType === 'hip' || c.roofType === 'pyramid') {
+      assert.equal(roofParts.length, 8, `Expected 8 straight-skeleton hip panels on U-shape, got ${roofParts.length}`);
+      assert.ok(res.parts.filter((pt) => pt.key.startsWith('roof-truss')).length >= 2, 'Expected internal truss skeleton for U-shape hip roof');
+    }
+    for (const pt of res.parts) {
+      assert.ok(res.poses.poses[pt.key], `Missing 3D pose for ${pt.key} on U-shape ${JSON.stringify(c)}`);
+    }
+  }
+
+  // Deep front courtyard (y_m = 34 -> Y_3D = 63, strictly past ridge Y=50 even after 6 mm overhang): splits front gable into roof-front-1 & roof-front-2!
+  const deepUWalls = uWalls.map((wl) =>
+    wl.id === 5 ? { ...wl, pos: 34 } : wl.id === 4 || wl.id === 6 ? { ...wl, from: 34 } : wl,
+  );
+  const { plugin: pluginDeep } = loadPlugin();
+  const pDeepU = { ...baseU, walls: JSON.stringify(deepUWalls), roofType: 'gable', ridgeAxis: 'x', roofOverhang: 6, roofGableOverhang: 6 };
+  const deepErrs = pluginDeep.validate(pDeepU).filter((i) => i.level === 'error');
+  assert.equal(deepErrs.length, 0, `Deep-courtyard U-shape gable failed: ${JSON.stringify(deepErrs)}`);
+  const deepRes = pluginDeep.generate(pDeepU);
+  assert.ok(
+    deepRes.parts.some((pt) => pt.key === 'roof-front-1') && deepRes.parts.some((pt) => pt.key === 'roof-front-2'),
+    'Expected deep U-courtyard to split front gable into roof-front-1 and roof-front-2',
+  );
+  assert.ok(deepRes.parts.some((pt) => pt.key === 'roof-back'), 'Expected back gable panel on deep U-courtyard');
+
+  // Narrow courtyard gap (~55 mm -> max overhang ~27 mm): huge overhang (30 mm) must fail cleanly with roof-overhang-notch!
+  const { plugin } = loadPlugin();
+  assert.ok(
+    plugin.validate({ ...baseU, roofType: 'hip', roofOverhang: 30 }).some((i) => i.code === 'roof-overhang-notch'),
+    'Expected roof-overhang-notch error when overhang would close U-courtyard',
+  );
+});
+
+test('Shaped L/U 3: L-shape supports midFloor, chimney, 3D cutout trim frames, plan/elevation roof lines, and <0.001mm 3D alignment', () => {
+  const base = defaultParams();
+  const t = 3,
+    w = 114,
+    d = 84;
+  const lWalls = [
+    { id: 1, axis: 'h', pos: -t / 2, from: -t / 2, to: w / 2 },
+    { id: 2, axis: 'v', pos: w / 2, from: -t / 2, to: d / 2 },
+    { id: 3, axis: 'h', pos: d / 2, from: w / 2, to: w + t / 2 },
+    { id: 4, axis: 'v', pos: w + t / 2, from: d / 2, to: d + t / 2 },
+    { id: 5, axis: 'h', pos: d + t / 2, from: -t / 2, to: w + t / 2 },
+    { id: 6, axis: 'v', pos: -t / 2, from: -t / 2, to: d + t / 2 },
+  ];
+
+  // Full-featured L-shape: gable roof + chimney + 2nd-story midFloor w/ stairwell + openings + 3D cutout frames!
+  const { plugin } = loadPlugin();
+  const pFull = {
+    ...base,
+    height: 105,
+    roofType: 'gable',
+    ridgeAxis: 'x',
+    roofAngle: 35,
+    roofOverhang: 6,
+    roofGableOverhang: 6,
+    roofPattern: 'tiles',
+    roofPatternSize: 9,
+    midFloor: true,
+    midFloorHeight: 52,
+    midFloorStair: true,
+    chimney: true,
+    chimneyPos: 'left',
+    chimneySize: 14,
+    cutoutFrames: true,
+    walls: JSON.stringify(lWalls),
+    wallsRef: JSON.stringify([w, d]),
+    openings: JSON.stringify([
+      { id: 1, wall: 'front', kind: 'door', style: 'arch', x: 35, y: 0, w: 20, h: 40 },
+      { id: 2, wall: 'front', kind: 'window', style: 'cross', x: 85, y: 16, w: 18, h: 18 },
+      { id: 3, wall: 'left', kind: 'window', style: 'round', x: 45, y: 60, w: 16, h: 16 },
+    ]),
+  };
+  const errs = plugin.validate(pFull).filter((i) => i.level === 'error');
+  assert.equal(errs.length, 0, `Full-featured L-shape failed validation: ${JSON.stringify(errs)}`);
+  const res = plugin.generate(pFull);
+  assert.ok(res.parts.some((pt) => pt.key === 'mid-floor'), 'Missing shaped mid-floor');
+  assert.ok(res.parts.some((pt) => pt.key === 'chimney-cap'), 'Missing shaped chimney');
+  assert.ok(res.parts.some((pt) => pt.key === 'frame-1') && res.parts.some((pt) => pt.key === 'frame-2') && res.parts.some((pt) => pt.key === 'frame-3'), 'Missing 3D trim frames on shaped L-house');
+
+  // Plan view draws straight-skeleton roof lines on L-shape hip roof
+  const pHip = { ...pFull, roofType: 'hip', chimney: false };
+  const plan = plugin.draw({ view: 'plan', state: null, selected: { openings: -1, walls: -1 }, have: [], params: pHip });
+  const dashedMuted = plan.items.filter((it) => it.type === 'line' && it.style === 'muted' && it.dash);
+  assert.ok(dashedMuted.length >= 6, `Expected L-shape hip roof overhang & skeleton lines in plan view, got ${dashedMuted.length}`);
+
+  // Elevation view draws sloped roofline on shaped L-shape gable side wall
+  const elev = plugin.draw({ view: 'left', state: null, selected: { openings: -1, walls: -1 }, have: [], params: pFull });
+  assert.ok(
+    elev.items.some((it) => it.type === 'line' && it.style === 'normal' && it.pts.length >= 5),
+    'Expected gable silhouette polygon on shaped L-shape left wall elevation',
+  );
+
+  // Verify <0.001 mm 3D alignment of roof tenons into shaped shed, gable, and hip roof panels!
+  for (const cfg of [
+    { roofType: 'shed', shedDir: 'front', roofAngle: 25, roofOverhang: 6, roofGableOverhang: 6 },
+    { roofType: 'gable', ridgeAxis: 'x', roofAngle: 35, roofOverhang: 6, roofGableOverhang: 6 },
+    { roofType: 'hip', roofAngle: 35, roofOverhang: 6 },
+  ]) {
+    const { plugin: pl3, jointCalls } = loadPlugin();
+    const p3 = { ...base, ...cfg, walls: JSON.stringify(lWalls), wallsRef: JSON.stringify([w, d]), openings: '[]' };
+    const r3 = pl3.generate(p3);
+    const poses = r3.poses.poses;
+    const roofKeys = Object.keys(poses).filter((k) => k === 'roof' || (k.startsWith('roof-') && !k.startsWith('roof-truss') && !k.startsWith('roof-rail')));
+    const roofTenons = jointCalls.filter((jc) => jc.op === 'edge' && jc.options?.kind === 'tenon' && jc.edges.length === 2 && jc.edges[1].part === '_guide');
+    assert.ok(roofTenons.length >= 2, `Expected roof tenon joints for shaped ${cfg.roofType}`);
+    for (const jc of roofTenons) {
+      const srcKey = jc.edges[0].part;
+      const srcPose = poses[srcKey];
+      const sp = jc.parts[srcKey][0];
+      const seg = jc.edges[0].seg;
+      const a = sp.nodes[seg];
+      const b = sp.nodes[(seg + 1) % sp.nodes.length];
+      let minX = Infinity,
+        maxX = -Infinity,
+        minY = Infinity,
+        maxY = -Infinity;
+      for (const nd of sp.nodes) {
+        minX = Math.min(minX, nd.x);
+        maxX = Math.max(maxX, nd.x);
+        minY = Math.min(minY, nd.y);
+        maxY = Math.max(maxY, nd.y);
+      }
+      const finalPart = r3.parts.find((pt) => pt.key === srcKey);
+      let fMinX = Infinity,
+        fMaxX = -Infinity,
+        fMinY = Infinity,
+        fMaxY = -Infinity;
+      for (const nd of finalPart.subs[0].nodes) {
+        fMinX = Math.min(fMinX, nd.x);
+        fMaxX = Math.max(fMaxX, nd.x);
+        fMinY = Math.min(fMinY, nd.y);
+        fMaxY = Math.max(fMaxY, nd.y);
+      }
+      const isTurned = srcPose.u[0] < -0.5 || (srcPose.u[1] > 0.5 && srcKey.startsWith('outer-'));
+      // Exact centering offset (kerf cancels symmetrically between min & max!)
+      const cx = isTurned ? (minX + maxX) / 2 + (fMinX + fMaxX) / 2 : (minX + maxX) / 2 - (fMinX + fMaxX) / 2;
+      const cy = (minY + maxY) / 2 - (fMinY + fMaxY) / 2;
+      const rawMidX = (a.x + b.x) / 2;
+      const rawMidY = (a.y + b.y) / 2;
+      const lx = isTurned ? -(rawMidX - cx) : rawMidX - cx;
+      const ly = rawMidY - cy;
+      const p3Src = applyPose(srcPose, lx, ly, t / 2);
+      const gNodes = jc.parts._guide[0].nodes;
+      const gx = (gNodes[0].x + gNodes[1].x) / 2;
+      const gy = (gNodes[0].y + gNodes[1].y) / 2;
+      let bestDist = Infinity;
+      for (const rk of roofKeys) {
+        const p3Roof = applyPose(poses[rk], gx, gy, 0);
+        bestDist = Math.min(bestDist, Math.hypot(p3Src[0] - p3Roof[0], p3Src[1] - p3Roof[1], p3Src[2] - p3Roof[2]));
+      }
+      assert.ok(bestDist < 1e-3, `Shaped ${cfg.roofType} 3D tenon mismatch on ${srcKey}: dist=${bestDist.toFixed(4)} mm`);
+    }
+  }
+});
+
 
 
 

@@ -13,7 +13,7 @@ import {
   type WallHost,
 } from './openings';
 import { planDraw, planPointer, selectedId as planSelectedId, type Plan } from './planSurface';
-import { roofPlanLines, wallProfile, type OuterWallKey, type RoofSpec } from './roof';
+import { roofPlanLines, roofPlanLinesShaped, wallProfile, type OuterWallKey, type RoofSpec } from './roof';
 import type { Wall } from './model';
 
 export interface HouseSurfaceCtx {
@@ -33,6 +33,8 @@ export interface HouseSurfaceCtx {
   midFloorZ?: number;
   /** True when the outer footprint is non-rectangular (L/U/C shape) */
   isShaped?: boolean;
+  /** Outer-face 3D XY polygon for shaped L/U/C footprints (used for roof plan overlay) */
+  outerPoly3D?: [number, number][] | null;
   /** Interior walls currently built (for 'inner' view and plan opening symbols) */
   innerWalls: { id: number; key: string; axis: 'h' | 'v'; pos: number; s: number; e: number; h: number }[];
 }
@@ -96,13 +98,16 @@ function planOverlayItems(ctx: HouseSurfaceCtx): { items: Item[]; pad: number } 
   const { plan: pl, W, D, t, roof, openings, innerWalls } = ctx;
   const items: Item[] = [];
 
-  // 1. Subtle roof overhang outline and ridge / hip lines (only for rectangular footprints)
-  if (!ctx.isShaped) {
-    const rl = roofPlanLines(pl.w, pl.d, t, roof);
+  // 1. Subtle roof overhang outline and ridge / hip / valley lines (rectangular AND shaped L/U footprints!)
+  const rl =
+    ctx.isShaped && ctx.outerPoly3D?.length
+      ? roofPlanLinesShaped(ctx.outerPoly3D, W, D, t, roof)
+      : roofPlanLines(pl.w, pl.d, t, roof);
+  if (rl.outline.length >= 3) {
     items.push({ type: 'line', pts: rl.outline, closed: true, style: 'muted', width: 1, dash: true, alpha: 0.45 });
-    for (const [a, b] of rl.ridges) {
-      items.push({ type: 'line', pts: [a, b], style: 'muted', width: 1, dash: true, alpha: 0.55 });
-    }
+  }
+  for (const [a, b] of rl.ridges) {
+    items.push({ type: 'line', pts: [a, b], style: 'muted', width: 1, dash: true, alpha: 0.55 });
   }
 
   // 2. Subtle side compass labels so the user immediately sees which edge matches Front/Back/Left/Right views
@@ -399,19 +404,24 @@ function elevationDraw(ctx: HouseSurfaceCtx, s: Surface): Drawing {
     });
   }
 
-  // 1. Wall outer silhouette polygon (y = maxZ - Z); for shaped outer walls, highlight actually built spans!
+  // 1. Wall outer silhouette polygon (y = maxZ - Z); for shaped outer walls, highlight actually built spans with true roofline!
+  const fullTopPts: [number, number][] =
+    wk === 'front' || wk === 'back' || wk === 'left' || wk === 'right'
+      ? wallProfile(wk, ctx.W, ctx.D, ctx.H, ctx.t, ctx.roof).topPoints.map(([x, z]) => [x, maxZ - z])
+      : [[0, 0], [L, 0]];
   if (host.spans?.length) {
-    // Full bounding box as faint dashed guide so cut-out corners are clearly visible
-    items.push({ type: 'line', pts: [[0, 0], [L, 0], [L, maxZ], [0, maxZ]], closed: true, style: 'muted', width: 1, dash: true, alpha: 0.35 });
+    // Full bounding-wall roofline as faint dashed guide so cut-out corners are clearly visible
+    items.push({ type: 'line', pts: [...fullTopPts, [L, maxZ], [0, maxZ]], closed: true, style: 'muted', width: 1, dash: true, alpha: 0.35 });
     for (const [sa, sb] of host.spans) {
-      items.push({ type: 'line', pts: [[sa, 0], [sb, 0], [sb, maxZ], [sa, maxZ]], closed: true, style: 'normal', width: 2 });
+      const spanTop: [number, number][] = [[sa, maxZ - host.zAt(sa)]];
+      for (const [px, py] of fullTopPts) {
+        if (px > sa + 1e-4 && px < sb - 1e-4) spanTop.push([px, py]);
+      }
+      spanTop.push([sb, maxZ - host.zAt(sb)]);
+      items.push({ type: 'line', pts: [...spanTop, [sb, maxZ], [sa, maxZ]], closed: true, style: 'normal', width: 2 });
     }
   } else {
-    const topPts: [number, number][] =
-      wk === 'front' || wk === 'back' || wk === 'left' || wk === 'right'
-        ? wallProfile(wk, ctx.W, ctx.D, ctx.H, ctx.t, ctx.roof).topPoints.map(([x, z]) => [x, maxZ - z])
-        : [[0, 0], [L, 0]];
-    const wallPoly: [number, number][] = [...topPts, [L, maxZ], [0, maxZ]];
+    const wallPoly: [number, number][] = [...fullTopPts, [L, maxZ], [0, maxZ]];
     items.push({ type: 'line', pts: wallPoly, closed: true, style: 'normal', width: 2 });
   }
 
