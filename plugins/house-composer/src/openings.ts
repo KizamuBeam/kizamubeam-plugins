@@ -731,6 +731,8 @@ export function buildWallHosts(
     const hasTopJoint =
       roof.mount === 'fixed' &&
       (roof.type === 'flat' ||
+        roof.type === 'hip' ||
+        roof.type === 'pyramid' ||
         (roof.type === 'gable' && prof.kind === 'gable') ||
         (roof.type === 'shed' && prof.kind === 'shed-slope'));
     hosts.set(

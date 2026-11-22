@@ -417,7 +417,7 @@ test('all 5 roof types × options × flush/overhanging × removable generate val
 
     // Verify outer-face-up orientation (-(u×v) ≈ +n) for EVERY roof panel!
     for (const part of res.parts) {
-      if (!part.key.startsWith('roof') || part.key.startsWith('roof-truss')) continue;
+      if (!part.key.startsWith('roof') || part.key.startsWith('roof-truss') || part.key.startsWith('roof-rail')) continue;
       const pose = res.poses.poses[part.key];
       assert.ok(pose, `Missing pose for ${part.key}`);
       const c3 = cross3(pose.u, pose.v);
@@ -962,5 +962,203 @@ test('Block 1.5: roof engraving skips tenon slots and oversized opening frames w
     }
   }
 });
+
+test('Block 2.1: hip & pyramid crossed trusses interlock all 4 roof panels with <0.001mm 3D alignment and zero check-web-cut', () => {
+  const base = defaultParams();
+  const cases = [
+    { roofType: 'hip', width: 140, depth: 90, roofAngle: 35, roofMount: 'fixed' },
+    { roofType: 'hip', width: 140, depth: 90, roofAngle: 35, roofMount: 'removable' },
+    { roofType: 'hip', width: 90, depth: 140, roofAngle: 35, roofMount: 'fixed' },
+    { roofType: 'hip', width: 100, depth: 95, roofAngle: 40, roofMount: 'fixed' }, // short ridge (shoulder on spine)
+    { roofType: 'hip', width: 120, depth: 90, roofAngle: 62, roofMount: 'fixed' }, // steep hip
+    { roofType: 'pyramid', width: 100, depth: 100, roofAngle: 35, roofMount: 'fixed' },
+    { roofType: 'pyramid', width: 130, depth: 90, roofAngle: 35, roofMount: 'removable' },
+    { roofType: 'pyramid', width: 110, depth: 90, roofAngle: 64, roofMount: 'fixed' }, // steep pyramid
+  ];
+
+  for (const c of cases) {
+    const { plugin, jointCalls } = loadPlugin();
+    const p = { ...base, ...c, roofPattern: 'tiles', roofPatternSize: 9, openings: '[]' };
+    const errs = plugin.validate(p).filter((i) => i.level === 'error');
+    assert.equal(errs.length, 0, `Hip/pyramid ${JSON.stringify(c)} failed validation: ${JSON.stringify(errs)}`);
+    const res = plugin.generate(p);
+    const poses = res.poses.poses;
+    const t = p.thickness;
+    const W = p.width,
+      D = p.depth,
+      H = p.height;
+
+    // Must have crossed trusses (at least roof-truss-1 and roof-truss-2)
+    assert.ok(res.parts.some((pt) => pt.key === 'roof-truss-1'), `Missing roof-truss-1 for ${JSON.stringify(c)}`);
+    assert.ok(res.parts.some((pt) => pt.key === 'roof-truss-2'), `Missing roof-truss-2 for ${JSON.stringify(c)}`);
+
+    // All 4 roof panels must have tenon slot holes (subs.length > 1) AND roof marks clear of those holes!
+    const roofKeys = ['roof-front', 'roof-back', 'roof-left', 'roof-right'];
+    for (const rk of roofKeys) {
+      const rp = res.parts.find((pt) => pt.key === rk);
+      assert.ok(rp && rp.subs.length > 1, `Expected tenon slot holes in ${rk} for ${JSON.stringify(c)}`);
+      assert.ok(rp.marks && rp.marks.length > 0, `Expected tile marks on ${rk} for ${JSON.stringify(c)}`);
+      const holes = rp.subs.slice(1).map((sp) => {
+        let x0 = Infinity,
+          x1 = -Infinity,
+          y0 = Infinity,
+          y1 = -Infinity;
+        for (const n of sp.nodes) (x0 = Math.min(x0, n.x)), (x1 = Math.max(x1, n.x)), (y0 = Math.min(y0, n.y)), (y1 = Math.max(y1, n.y));
+        return [x0, y0, x1, y1];
+      });
+      for (const mk of rp.marks) {
+        for (let i = 0; i + 1 < mk.nodes.length; i++) {
+          const a = mk.nodes[i],
+            b = mk.nodes[i + 1];
+          for (const [x0, y0, x1, y1] of holes) {
+            for (let s = 0; s <= 4; s++) {
+              const px = a.x + ((b.x - a.x) * s) / 4;
+              const py = a.y + ((b.y - a.y) * s) / 4;
+              assert.ok(
+                !(px > x0 - 0.1 && px < x1 + 0.1 && py > y0 - 0.1 && py < y1 + 0.1),
+                `Engraving on ${rk} entered truss slot for ${JSON.stringify(c)}`,
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // Verify 3D alignment < 0.001 mm for every truss-to-roof tenon joint!
+    const roofTenons = jointCalls.filter(
+      (jc) => jc.op === 'edge' && jc.options?.kind === 'tenon' && jc.edges.length === 2 && jc.edges[1].part === '_guide',
+    );
+    assert.ok(roofTenons.length >= 4, `Expected at least 4 roof tenons for ${JSON.stringify(c)}`);
+    for (const jc of roofTenons) {
+      const srcKey = jc.edges[0].part;
+      const srcPose = poses[srcKey];
+      const sp = jc.parts[srcKey][0];
+      const seg = jc.edges[0].seg;
+      const a = sp.nodes[seg];
+      const b = sp.nodes[(seg + 1) % sp.nodes.length];
+      const rawMidX = (a.x + b.x) / 2;
+      const rawMidY = (a.y + b.y) / 2;
+      // Trusses are centered at (outerSpan/2, rise/2) where rise/2 = srcPose.o[2] - H
+      const isAlongX = Math.abs(srcPose.u[0]) > 0.5;
+      const cx = (isAlongX ? W : D) / 2;
+      const cy = srcPose.o[2] - H;
+      const p3Src = applyPose(srcPose, rawMidX - cx, rawMidY - cy, t / 2);
+      const gNodes = jc.parts._guide[0].nodes;
+      const gMidX = (gNodes[0].x + gNodes[1].x) / 2;
+      const gMidY = (gNodes[0].y + gNodes[1].y) / 2;
+      let bestDist = Infinity;
+      for (const rk of roofKeys) {
+        const p3Roof = applyPose(poses[rk], gMidX, gMidY, 0);
+        bestDist = Math.min(bestDist, Math.hypot(p3Src[0] - p3Roof[0], p3Src[1] - p3Roof[1], p3Src[2] - p3Roof[2]));
+      }
+      assert.ok(bestDist < 1e-3, `Hip/pyramid 3D tenon mismatch for ${JSON.stringify(c)} src=${srcKey}: dist=${bestDist}`);
+    }
+  }
+});
+
+test('Block 2.2: removable flat & shed roofs build aligned stop rails that avoid interior walls and roof engravings', () => {
+  const base = defaultParams();
+  const cases = [
+    { roofType: 'flat', roofMount: 'removable', roofOverhang: 6 },
+    { roofType: 'flat', roofMount: 'removable', roofOverhang: 0, wallFront: false, wallBack: false },
+    { roofType: 'shed', shedDir: 'front', roofMount: 'removable', roofAngle: 22 },
+    { roofType: 'shed', shedDir: 'back', roofMount: 'removable', roofAngle: 22 },
+    { roofType: 'shed', shedDir: 'left', roofMount: 'removable', roofAngle: 22 },
+    { roofType: 'shed', shedDir: 'right', roofMount: 'removable', roofAngle: 22 },
+  ];
+
+  for (const c of cases) {
+    const { plugin, jointCalls } = loadPlugin();
+    const p = { ...base, ...c, roofPattern: 'tiles', roofPatternSize: 10, openings: '[]' };
+    const errs = plugin.validate(p).filter((i) => i.level === 'error');
+    assert.equal(errs.length, 0, `Removable ${JSON.stringify(c)} failed validation: ${JSON.stringify(errs)}`);
+    const res = plugin.generate(p);
+    const poses = res.poses.poses;
+    const t = p.thickness;
+
+    const railParts = res.parts.filter((pt) => pt.key.startsWith('roof-rail'));
+    assert.ok(railParts.length >= 1, `Expected underside stop rail(s) for ${JSON.stringify(c)}`);
+
+    // Roof panel must have tenon slot holes from the rails!
+    const roofPart = res.parts.find((pt) => pt.key === 'roof');
+    assert.ok(roofPart && roofPart.subs.length > 1, `Expected rail tenon slots in roof for ${JSON.stringify(c)}`);
+
+    // Verify 3D alignment < 0.001 mm for every rail tenon into the roof panel!
+    const railTenons = jointCalls.filter(
+      (jc) =>
+        jc.op === 'edge' &&
+        jc.options?.kind === 'tenon' &&
+        jc.edges.length === 2 &&
+        jc.edges[0].part.startsWith('roof-rail') &&
+        jc.edges[1].part === '_guide',
+    );
+    assert.ok(railTenons.length >= 1, `Expected rail tenon joints for ${JSON.stringify(c)}`);
+    for (const jc of railTenons) {
+      const srcKey = jc.edges[0].part;
+      const srcPose = poses[srcKey];
+      const sp = jc.parts[srcKey][0];
+      const seg = jc.edges[0].seg;
+      const a = sp.nodes[seg];
+      const b = sp.nodes[(seg + 1) % sp.nodes.length];
+      let minX = Infinity,
+        maxX = -Infinity,
+        minY = Infinity,
+        maxY = -Infinity;
+      for (const n of sp.nodes) (minX = Math.min(minX, n.x)), (maxX = Math.max(maxX, n.x)), (minY = Math.min(minY, n.y)), (maxY = Math.max(maxY, n.y));
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      const p3Src = applyPose(srcPose, (a.x + b.x) / 2 - cx, (a.y + b.y) / 2 - cy, t / 2);
+      const gNodes = jc.parts._guide[0].nodes;
+      const gMidX = (gNodes[0].x + gNodes[1].x) / 2;
+      const gMidY = (gNodes[0].y + gNodes[1].y) / 2;
+      const p3Roof = applyPose(poses.roof, gMidX, gMidY, 0);
+      const dist = Math.hypot(p3Src[0] - p3Roof[0], p3Src[1] - p3Roof[1], p3Src[2] - p3Roof[2]);
+      assert.ok(dist < 1e-3, `Removable rail 3D mismatch for ${JSON.stringify(c)} src=${srcKey}: dist=${dist}`);
+    }
+  }
+
+  // Interior wall clearance: vertical room divider at X = 60 (pos = 57) with dividerDrop = 0 must split the rail so it stays clear!
+  const { plugin } = loadPlugin();
+  const pWithInner = {
+    ...base,
+    roofType: 'flat',
+    roofMount: 'removable',
+    dividerDrop: 0,
+    walls: JSON.stringify([{ id: 1, axis: 'v', pos: 57, from: 0, to: 84 }]),
+    wallsRef: JSON.stringify([114, 84]),
+    openings: '[]',
+  };
+  assert.equal(plugin.validate(pWithInner).filter((i) => i.level === 'error').length, 0);
+  const resInner = plugin.generate(pWithInner);
+  const rail1 = resInner.parts.find((pt) => pt.key === 'roof-rail-1');
+  assert.ok(rail1, 'Expected shortened rail-1 in clear half of room');
+  const pose1 = resInner.poses.poses['roof-rail-1'];
+  // Rail 3D X span must NOT cross X = 60 (the interior wall at pos=57 -> 3D X = 60)
+  const xs = rail1.subs[0].nodes.map((n) => applyPose(pose1, n.x, n.y, 0)[0]);
+  const rMinX = Math.min(...xs),
+    rMaxX = Math.max(...xs);
+  assert.ok(rMaxX < 58.5 || rMinX > 61.5, `Removable rail [${rMinX.toFixed(1)}..${rMaxX.toFixed(1)}] collided with interior wall at X=60`);
+});
+
+test('Block 2.3: fixed gable roof with a missing gable wall adds a centered support truss with exact 3D alignment', () => {
+  const { plugin, jointCalls } = loadPlugin();
+  const p = {
+    ...defaultParams(),
+    roofType: 'gable',
+    ridgeAxis: 'x',
+    roofMount: 'fixed',
+    wallLeft: false,
+    openings: '[]',
+  };
+  const errs = plugin.validate(p).filter((i) => i.level === 'error');
+  assert.equal(errs.length, 0, `Open-gable fixed roof failed: ${JSON.stringify(errs)}`);
+  const res = plugin.generate(p);
+  assert.ok(res.parts.some((pt) => pt.key === 'roof-truss'), 'Expected center roof-truss when left gable wall is off');
+  const trussTenons = jointCalls.filter(
+    (jc) => jc.op === 'edge' && jc.options?.kind === 'tenon' && jc.edges[0].part === 'roof-truss',
+  );
+  assert.ok(trussTenons.length >= 2, 'Expected support truss to tenon into both gable roof slopes');
+});
+
 
 

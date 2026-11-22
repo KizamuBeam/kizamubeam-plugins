@@ -17,6 +17,7 @@ import {
 } from './openings';
 import {
   buildRoofPanels,
+  buildRoofRails,
   buildRoofTrusses,
   computeRoofMetrics,
   roofPatternMarks,
@@ -24,6 +25,7 @@ import {
   type OuterWallKey,
   type RoofExclusion,
   type RoofPanelGeom,
+  type RoofRailSpec,
   type RoofSpec,
   type TrussSpec,
 } from './roof';
@@ -82,6 +84,7 @@ export interface BuiltHouse {
   boards: Board[];
   roofPanels: RoofPanelGeom[];
   trusses: TrussSpec[];
+  rails: RoofRailSpec[];
   /** Uncentered panel height (maxZ - floorZ or maxZ) for each outer wall, used by 3D poses */
   outerHeights: Partial<Record<OuterWallKey, { topZ: number; botZ: number }>>;
   hosts: Map<string, WallHost>;
@@ -885,119 +888,259 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     }
   }
 
-  // 7. Removable gable attic trusses (with tenons into the two roof panels so the roof lifts off as one rigid piece)
-  const trusses = buildRoofTrusses(W, D, H, t, roof);
-  for (const tr of trusses) {
-    const half = tr.innerSpan / 2;
-    const h = tr.rise;
+  // 7. Attic trusses (removable gable, open-gable support, and crossed hip/pyramid roof skeletons)
+  const trusses = buildRoofTrusses(W, D, H, t, roof, sides);
+  const lapHalfW = Math.max(0.5, (t + d.clearance) / 2);
+  const lapShoulder = Math.min(1.5, t * 0.5);
+
+  // Precompute each truss's top plateau so intersecting spine & cross trusses share an identical half-lap Z plane
+  const trussMeta = trusses.map((tr) => {
     const ca = Math.cos(tr.pitchRad);
     const tanA = Math.tan(tr.pitchRad);
     const pitchDeg = (tr.pitchRad * 180) / Math.PI;
-    const halfFlat = pitchDeg > 55 ? Math.min(Math.max(0.6, t * 0.4), Math.min(1.0, t * 0.55)) : 0;
-    const yPeak = halfFlat * tanA;
-    const uPeak = halfFlat / ca;
-    const LsInner = half / ca;
-    const LsEdge = LsInner - uPeak;
+    const topLaps = tr.laps.filter((lp) => lp.fromTop);
+    let halfTop = tr.topFlat / 2;
+    if (topLaps.length) {
+      const maxNeed = Math.max(...topLaps.map((lp) => Math.abs(lp.offsetFromCenter))) + lapHalfW + lapShoulder;
+      halfTop = Math.max(halfTop, maxNeed);
+    } else if (halfTop < EPS && pitchDeg > 55) {
+      halfTop = Math.min(Math.max(0.6, t * 0.4), Math.min(1.0, t * 0.55));
+    }
+    const extraFlat = Math.max(0, halfTop - tr.topFlat / 2);
+    const yPeak = extraFlat * tanA;
+    const uPeak = extraFlat / ca;
+    return { tr, ca, tanA, halfTop, yPeak, uPeak };
+  });
+
+  const maxYPeak = trussMeta.reduce((acc, tm) => Math.max(acc, tm.yPeak), 0);
+  const sharedLapY = trussMeta.length ? maxYPeak + (trussMeta[0].tr.rise - maxYPeak) * 0.5 : 0;
+
+  // Map outer wall keys to interior-wall T-joint positions (unmirrored panel X) so fixed truss hooks never collide
+  const outerInnerJoints: Record<OuterWallKey, number[]> = { front: [], back: [], left: [], right: [] };
+  for (const wi of m.walls) {
+    for (const end of [wi.start, wi.end]) {
+      if (end.kind === 'outer') outerInnerJoints[OUTER[end.side]].push(wi.wall.pos + t);
+    }
+  }
+
+  for (const { tr, ca, tanA, halfTop, yPeak, uPeak } of trussMeta) {
+    const cx = tr.outerSpan / 2;
+    const h = tr.rise;
+    const LsInner = (tr.innerSpan - tr.topFlat) / 2 / ca;
     const sRidge = Math.max(t, t * tanA) + t;
     const sHeel = Math.max(t, t / ca) + t * 0.5;
-    const spans = roofTenonSpans(sRidge - uPeak, LsInner - sHeel - uPeak, t, finger);
 
-    // Uncentered truss coords: x ∈ [0..innerSpan] (peak plateau around x=half, y=yPeak; base at y=h)
-    const pPeakL: Pt = { x: half - halfFlat, y: yPeak };
-    const pPeakR: Pt = { x: half + halfFlat, y: yPeak };
-    const pL: Pt = { x: 0, y: h - tr.heel };
-    const pR: Pt = { x: tr.innerSpan, y: h - tr.heel };
+    const rpL = rpByKey.get(tr.leftRoofKey)!;
+    const rpR = rpByKey.get(tr.rightRoofKey)!;
+    const triWebMin = (rp: RoofPanelGeom) => {
+      if (rp.pts.length !== 3) return 0;
+      const ratio = rp.width / (2 * Math.max(EPS, rp.height));
+      return (t / 2 + Math.max(t, 2) + 0.5) / Math.max(0.15, ratio);
+    };
+    const sStartL = Math.max(sRidge, uPeak + t, triWebMin(rpL));
+    const sStartR = Math.max(sRidge, uPeak + t, triWebMin(rpR));
+    const spansL = roofTenonSpans(sStartL - uPeak, LsInner - sHeel - uPeak, t, finger);
+    const spansR = roofTenonSpans(sStartR - uPeak, LsInner - sHeel - uPeak, t, finger);
+
+    // Optional fixed outer-wall saddle hooks for hip & pyramid roofs
+    const leftWall: OuterWallKey = tr.spanAxis === 'y' ? 'back' : 'left';
+    const rightWall: OuterWallKey = tr.spanAxis === 'y' ? 'front' : 'right';
+    const wallPanelX = tr.spanAxis === 'y' ? tr.at : D - tr.at;
+    const canHook = (wk: OuterWallKey) => {
+      if (!tr.fixedHooks) return false;
+      const s = setups.get(wk);
+      if (!s || !parts[wk]) return false;
+      if (wallPanelX < 2 * t + 1 || wallPanelX > s.L - 2 * t - 1) return false;
+      return !outerInnerJoints[wk].some((jx) => Math.abs(jx - wallPanelX) < t + 2);
+    };
+    const hookL = canHook(leftWall);
+    const hookR = canHook(rightWall);
+
+    // Uncentered truss coords: x ∈ [0..outerSpan] centered at cx = outerSpan/2, y ∈ [0..h] (+t on fixed saddle hooks)
+    const pPeakL: Pt = { x: cx - halfTop, y: yPeak };
+    const pPeakR: Pt = { x: cx + halfTop, y: yPeak };
+    const pL: Pt = hookL ? { x: 0, y: h } : { x: t, y: h - tr.heel };
+    const pR: Pt = hookR ? { x: tr.outerSpan, y: h } : { x: tr.outerSpan - t, y: h - tr.heel };
+    const LsLeft = Math.hypot(pPeakL.x - pL.x, pPeakL.y - pL.y);
+
     const nodes: Pt[] = [];
+    // Left slope up from pL to pPeakL
     pushNode(nodes, pL.x, pL.y);
-    if (spans.length) {
-      const pts = [...new Set(spans.flatMap((sp) => [LsEdge - sp.b, LsEdge - sp.a]))].sort((a, b) => a - b);
+    if (spansL.length) {
+      const pts = [...new Set(spansL.flatMap((sp) => [LsLeft - sp.b, LsLeft - sp.a]))].sort((a, b) => a - b);
       for (const s of pts) {
         const q = alongSeg(pL, pPeakL, s);
         pushNode(nodes, q.x, q.y);
       }
     }
     pushNode(nodes, pPeakL.x, pPeakL.y);
-    if (halfFlat > EPS) pushNode(nodes, pPeakR.x, pPeakR.y);
-    if (spans.length) {
-      const pts = [...new Set(spans.flatMap((sp) => [sp.a, sp.b]))].sort((a, b) => a - b);
+
+    // Top horizontal ridge edge (with optional top half-lap slots into cross trusses)
+    const topLaps = tr.laps
+      .filter((lp) => lp.fromTop)
+      .map((lp) => cx + lp.offsetFromCenter)
+      .sort((a, b) => a - b);
+    for (const lx of topLaps) {
+      pushNode(nodes, lx - lapHalfW, yPeak);
+      pushNode(nodes, lx - lapHalfW, sharedLapY);
+      pushNode(nodes, lx + lapHalfW, sharedLapY);
+      pushNode(nodes, lx + lapHalfW, yPeak);
+    }
+    if (halfTop > EPS) pushNode(nodes, pPeakR.x, pPeakR.y);
+
+    // Right slope down from pPeakR to pR
+    if (spansR.length) {
+      const pts = [...new Set(spansR.flatMap((sp) => [sp.a, sp.b]))].sort((a, b) => a - b);
       for (const s of pts) {
         const q = alongSeg(pPeakR, pR, s);
         pushNode(nodes, q.x, q.y);
       }
     }
     pushNode(nodes, pR.x, pR.y);
-    pushNode(nodes, tr.innerSpan, h);
-    pushNode(nodes, 0, h);
+
+    // Right end: either downward saddle hook into rightWall or vertical inner face to y=h
+    if (hookR) {
+      pushNode(nodes, tr.outerSpan, h + t);
+      pushNode(nodes, tr.outerSpan - t, h + t);
+    }
+    pushNode(nodes, tr.outerSpan - t, h);
+
+    // Bottom horizontal edge right-to-left (with optional bottom half-lap slots into spine truss)
+    const botLaps = tr.laps
+      .filter((lp) => !lp.fromTop)
+      .map((lp) => cx + lp.offsetFromCenter)
+      .sort((a, b) => b - a);
+    for (const lx of botLaps) {
+      pushNode(nodes, lx + lapHalfW, h);
+      pushNode(nodes, lx + lapHalfW, sharedLapY);
+      pushNode(nodes, lx - lapHalfW, sharedLapY);
+      pushNode(nodes, lx - lapHalfW, h);
+    }
+    pushNode(nodes, t, h);
+
+    // Left end: optional downward saddle hook into leftWall
+    if (hookL) {
+      pushNode(nodes, t, h + t);
+      pushNode(nodes, 0, h + t);
+    }
+
     parts[tr.key] = [{ closed: true, nodes }];
 
-    if (spans.length) {
-      if (roof.ridgeAxis === 'x') {
-        const rpF = rpByKey.get('roof-front')!;
-        const rpB = rpByKey.get('roof-back')!;
-        // tr.at is 3D X center; roof-front has u=+X (x = tr.at - W/2), roof-back has u=-X (x = W/2 - tr.at)
-        const xF = tr.at - W / 2;
-        const xB = W / 2 - tr.at;
-        for (const sp of spans) {
-          const rbA = { x: xB, y: -rpB.height / 2 + uPeak + sp.a };
-          const rbB = { x: xB, y: -rpB.height / 2 + uPeak + sp.b };
-          parts = tenonsInto(
-            parts,
-            opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
-            { part: tr.key, a: alongSeg(pPeakL, pL, sp.a), b: alongSeg(pPeakL, pL, sp.b) },
-            'roof-back',
-            rbA,
-            rbB,
-          );
-          addRoofExcl('roof-back', rbA, rbB, sp.width);
+    // Cut matching top saddle notches into fixed outer walls where hooks engage
+    const cutWallNotch = (wk: OuterWallKey) => {
+      const nw = (t + Math.max(0, d.clearance)) / 2;
+      const nd = t + Math.max(0, d.clearance) / 2;
+      const notch = polygon([[wallPanelX - nw, -1], [wallPanelX + nw, -1], [wallPanelX + nw, nd], [wallPanelX - nw, nd]]);
+      parts[wk] = host.boolean({ op: 'difference', a: parts[wk], b: [notch] });
+    };
+    if (hookL) cutWallNotch(leftWall);
+    if (hookR) cutWallNotch(rightWall);
 
-          const rfA = { x: xF, y: -rpF.height / 2 + uPeak + sp.a };
-          const rfB = { x: xF, y: -rpF.height / 2 + uPeak + sp.b };
-          parts = tenonsInto(
-            parts,
-            opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
-            { part: tr.key, a: alongSeg(pPeakR, pR, sp.a), b: alongSeg(pPeakR, pR, sp.b) },
-            'roof-front',
-            rfA,
-            rfB,
-          );
-          addRoofExcl('roof-front', rfA, rfB, sp.width);
-        }
-      } else {
-        const rpL = rpByKey.get('roof-left')!;
-        const rpR = rpByKey.get('roof-right')!;
-        // tr.at is 3D Y center; roof-left has u=-Y (x = D/2 - tr.at), roof-right has u=+Y (x = tr.at - D/2)
-        const xL_r = D / 2 - tr.at;
-        const xR_r = tr.at - D / 2;
-        for (const sp of spans) {
-          const rlA = { x: xL_r, y: -rpL.height / 2 + uPeak + sp.a };
-          const rlB = { x: xL_r, y: -rpL.height / 2 + uPeak + sp.b };
-          parts = tenonsInto(
-            parts,
-            opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
-            { part: tr.key, a: alongSeg(pPeakL, pL, sp.a), b: alongSeg(pPeakL, pL, sp.b) },
-            'roof-left',
-            rlA,
-            rlB,
-          );
-          addRoofExcl('roof-left', rlA, rlB, sp.width);
+    // Tenon left & right slopes into their matching roof panels
+    for (const sp of spansL) {
+      const rlA = { x: tr.leftRoofX, y: -rpL.height / 2 + uPeak + sp.a };
+      const rlB = { x: tr.leftRoofX, y: -rpL.height / 2 + uPeak + sp.b };
+      parts = tenonsInto(
+        parts,
+        opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
+        { part: tr.key, a: alongSeg(pPeakL, pL, sp.a), b: alongSeg(pPeakL, pL, sp.b) },
+        tr.leftRoofKey,
+        rlA,
+        rlB,
+      );
+      addRoofExcl(tr.leftRoofKey, rlA, rlB, sp.width);
+    }
+    for (const sp of spansR) {
+      const rrA = { x: tr.rightRoofX, y: -rpR.height / 2 + uPeak + sp.a };
+      const rrB = { x: tr.rightRoofX, y: -rpR.height / 2 + uPeak + sp.b };
+      parts = tenonsInto(
+        parts,
+        opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
+        { part: tr.key, a: alongSeg(pPeakR, pR, sp.a), b: alongSeg(pPeakR, pR, sp.b) },
+        tr.rightRoofKey,
+        rrA,
+        rrB,
+      );
+      addRoofExcl(tr.rightRoofKey, rrA, rrB, sp.width);
+    }
 
-          const rrA = { x: xR_r, y: -rpR.height / 2 + uPeak + sp.a };
-          const rrB = { x: xR_r, y: -rpR.height / 2 + uPeak + sp.b };
-          parts = tenonsInto(
-            parts,
-            opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
-            { part: tr.key, a: alongSeg(pPeakR, pR, sp.a), b: alongSeg(pPeakR, pR, sp.b) },
-            'roof-right',
-            rrA,
-            rrB,
-          );
-          addRoofExcl('roof-right', rrA, rrB, sp.width);
+    // Center the truss around (outerSpan/2, h/2) to match tr.pose
+    parts[tr.key] = shiftSubs(parts[tr.key], -cx, -h / 2);
+  }
+
+  // 7a. Underside positioning rails / stop cleats for removable flat and shed roofs
+  const rawRails = buildRoofRails(W, D, H, t, d.floor, sides, roof);
+  const builtRails: RoofRailSpec[] = [];
+  const innerTopZ = floorZ + innerHeight(d);
+  for (const rl of rawRails) {
+    // Partition [-rl.length/2, +rl.length/2] around any perpendicular interior walls that reach into the rail's Z band
+    const blockers: [number, number][] = [];
+    if (innerTopZ > H - rl.height - 0.5) {
+      const padW = t / 2 + 0.4;
+      for (const wi of m.walls) {
+        if (rl.spanAxis === 'x' && wi.wall.axis === 'v') {
+          const yInner = D - t - rl.perpPos3D;
+          if (yInner >= wi.wall.from - t - 0.5 && yInner <= wi.wall.to + t + 0.5) {
+            const wx = wi.wall.pos + t;
+            const u = (wx - rl.pose.o[0]) * rl.pose.u[0];
+            blockers.push([u - padW, u + padW]);
+          }
+        } else if (rl.spanAxis === 'y' && wi.wall.axis === 'h') {
+          const xInner = rl.perpPos3D - t;
+          if (xInner >= wi.wall.from - t - 0.5 && xInner <= wi.wall.to + t + 0.5) {
+            const wy = D - t - wi.wall.pos;
+            const u = (wy - rl.pose.o[1]) * rl.pose.u[1];
+            blockers.push([u - padW, u + padW]);
+          }
         }
       }
     }
+    let freeSegs: [number, number][] = [[-rl.length / 2, rl.length / 2]];
+    for (const [b0, b1] of blockers) {
+      const next: [number, number][] = [];
+      for (const [a, b] of freeSegs) {
+        if (b1 <= a || b0 >= b) next.push([a, b]);
+        else {
+          if (b0 > a + EPS) next.push([a, b0]);
+          if (b1 < b - EPS) next.push([b1, b]);
+        }
+      }
+      freeSegs = next;
+    }
+    freeSegs.sort((a, b) => b[1] - b[0] - (a[1] - a[0]));
+    const best = freeSegs[0];
+    if (!best || best[1] - best[0] < Math.max(3 * t, 12)) continue;
 
-    // Center the truss around (half, h/2)
-    parts[tr.key] = shiftSubs(parts[tr.key], -half, -h / 2);
+    const [u0, u1] = best;
+    const len = u1 - u0;
+    const uShift = (u0 + u1) / 2;
+    const spans = roofTenonSpans(t * 0.5, len - t * 0.5, t, finger);
+    if (!spans.length || !parts[rl.roofKey]) continue;
+
+    parts[rl.key] = [panel(len, rl.height, { top: spans.flatMap((sp) => [sp.a, sp.b]), bottom: [], left: [], right: [] })];
+    for (const sp of spans) {
+      const ra = rl.roofAxis === 'x' ? { x: u0 + sp.a, y: rl.roofY } : { x: rl.roofY, y: u0 + sp.a };
+      const rb = rl.roofAxis === 'x' ? { x: u0 + sp.b, y: rl.roofY } : { x: rl.roofY, y: u0 + sp.b };
+      parts = tenonsInto(
+        parts,
+        opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
+        { part: rl.key, a: { x: sp.a, y: 0 }, b: { x: sp.b, y: 0 } },
+        rl.roofKey,
+        ra,
+        rb,
+      );
+      addRoofExcl(rl.roofKey, ra, rb, sp.width);
+    }
+    parts[rl.key] = shiftSubs(parts[rl.key], -len / 2, -rl.height / 2);
+    const pose: Pose = {
+      ...rl.pose,
+      o: [
+        rl.pose.o[0] + uShift * rl.pose.u[0],
+        rl.pose.o[1] + uShift * rl.pose.u[1],
+        rl.pose.o[2] + uShift * rl.pose.u[2],
+      ],
+    };
+    builtRails.push({ ...rl, length: len, pose });
   }
 
   // 7b. Roof engraving patterns (clipped to roof panel polygon AND skipping all tenon slot exclusion zones)
@@ -1085,7 +1228,7 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     if (marks[p.key]) marks[p.key] = shiftSubs(marks[p.key], -cx, -cy);
   }
 
-  return { parts, marks, info: dedupeInfo(info), walls, boards: [], roofPanels, trusses, outerHeights, hosts };
+  return { parts, marks, info: dedupeInfo(info), walls, boards: [], roofPanels, trusses, rails: builtRails, outerHeights, hosts };
 }
 
 /** Translate every node and Bezier handle in a list of SubPaths by (dx, dy) */
@@ -1502,6 +1645,7 @@ function shapedHouseParts(m: Model, d: HouseDims, openings: Opening[]): BuiltHou
     boards: bs,
     roofPanels,
     trusses: [],
+    rails: [],
     outerHeights: {},
     hosts,
   };
@@ -1543,7 +1687,7 @@ export function turnOver(
   return { parts: outParts, marks: outMarks };
 }
 
-/** 3D assembly poses for every part of the house (floor, walls, boards, roof panels, attic trusses) */
+/** 3D assembly poses for every part of the house (floor, walls, boards, roof panels, attic trusses, roof rails) */
 export function housePoses(built: BuiltHouse, d: HouseDims, keys: string[]): Record<string, Pose> {
   const { W, D, H, t } = d;
   const floorZ = d.floor ? t : 0;
@@ -1561,6 +1705,7 @@ export function housePoses(built: BuiltHouse, d: HouseDims, keys: string[]): Rec
 
   for (const rp of built.roofPanels) all[rp.key] = rp.pose;
   for (const tr of built.trusses) all[tr.key] = tr.pose;
+  for (const rl of built.rails) all[rl.key] = rl.pose;
 
   const along = (key: string, axis: 'h' | 'v', pos: number, mid: number, z: number, over = false) => {
     const u = axis === 'h' ? X : neg(Y);

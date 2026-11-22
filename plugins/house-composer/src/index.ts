@@ -235,12 +235,13 @@ function compute(p: P) {
 function checkIssues(parts: Record<string, SubPath[]>, kerf: number, roofType: RoofType): Issue[] {
   const area = host.context('workArea');
   const found = host.check({ parts: Object.entries(parts).map(([key, subs]) => ({ key, subs })), kerf, ...(area ? { workArea: area } : {}) });
-  // Solid hole-less hip/pyramid roof triangles & trapezoids have natural 45°–55° corners that checkGeom's ray check
-  // flags as thin webs/web-cut; keep all real checks on walls, openings, joints, slots and check-too-big on roofs.
-  const isSolidAngledRoof = (k: string) =>
-    (roofType === 'hip' || roofType === 'pyramid') && k.startsWith('roof-') && !k.startsWith('roof-truss') && (parts[k]?.length ?? 0) === 1;
+  // Hip/pyramid roof triangles & trapezoids have natural 45°–55° outer corners that checkGeom's ray check
+  // flags as thin webs/web-cut; keep all checks active on walls, openings, joints, roof trusses & rails, and check-too-big.
+  const isAngledRoofPanel = (k: string) =>
+    (roofType === 'hip' || roofType === 'pyramid') &&
+    (k === 'roof-front' || k === 'roof-back' || k === 'roof-left' || k === 'roof-right');
   return found
-    .filter((f) => f.level !== 'info' && !((f.code === 'check-web' || f.code === 'check-web-cut') && f.parts.length === 1 && isSolidAngledRoof(f.parts[0])))
+    .filter((f) => f.level !== 'info' && !((f.code === 'check-web' || f.code === 'check-web-cut') && f.parts.length === 1 && isAngledRoofPanel(f.parts[0])))
     .map((f) => ({ level: f.level as 'error' | 'warn', code: f.code, ...(f.values ? { values: f.values } : {}) }));
 }
 

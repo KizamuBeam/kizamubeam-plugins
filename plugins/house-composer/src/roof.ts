@@ -85,21 +85,54 @@ export interface RoofPanelGeom {
 
 export interface TrussSpec {
   key: string;
-  /** Axis the truss plane lies along ('y' for ridgeAxis='x' trusses spanning depth D, 'x' for ridgeAxis='y') */
+  kind: 'gable' | 'hip-spine' | 'hip-cross' | 'pyramid';
+  /** Axis the truss plane lies along ('y' spans D in YZ plane; 'x' spans W in XZ plane) */
   spanAxis: 'x' | 'y';
   /** Center position along the perpendicular axis (3D X if spanAxis='y', 3D Y if spanAxis='x') */
   at: number;
-  /** Inner span (between the two eaves walls, e.g. D - 2t) */
+  /** Inner span (between the two opposite outer walls: D - 2t or W - 2t) */
   innerSpan: number;
   /** Full outer span (D or W) */
   outerSpan: number;
+  /** Horizontal ridge length at top of truss (0 for triangle, |W-D| for hip spine) */
+  topFlat: number;
   eavesZ: number;
   rise: number;
   pitchRad: number;
   /** Vertical heel height at inner wall face = t * tan(pitchRad) */
   heel: number;
+  /** Half-lap intersections with perpendicular trusses (positions in 3D along spanAxis, measured from inner start) */
+  laps: { offsetFromCenter: number; fromTop: boolean }[];
+  /** Roof panels touched by left (smaller local x) and right (larger local x) slopes */
+  leftRoofKey: string;
+  rightRoofKey: string;
+  /** Local x coordinate on leftRoofKey and rightRoofKey where tenon slots sit */
+  leftRoofX: number;
+  rightRoofX: number;
+  /** Whether outer-wall saddle hooks should engage fixed outer walls at both ends */
+  fixedHooks: boolean;
   /** Outline in local centered coords (x along spanAxis, y down from peak to eaves) */
   pts: [number, number][];
+  pose: Pose;
+}
+
+export interface RoofRailSpec {
+  key: string;
+  /** Axis the rail spans along ('x' = width W, 'y' = depth D) */
+  spanAxis: 'x' | 'y';
+  /** Clear length of the rail (before any interior-wall shortening) */
+  length: number;
+  /** Height protruding perpendicular below roof underside */
+  height: number;
+  /** Roof panel key this rail tenons into */
+  roofKey: string;
+  /** Local y coordinate on roofKey (horizontal tenon line) or local x coordinate (vertical tenon line) */
+  roofY: number;
+  /** Whether the rail line runs along roof local X ('x') or roof local Y ('y') */
+  roofAxis: 'x' | 'y';
+  /** 3D center coordinate along the perpendicular axis (Y if spanAxis='x', X if spanAxis='y') */
+  perpPos3D: number;
+  /** 3D pose of the centered rail */
   pose: Pose;
 }
 
@@ -797,56 +830,370 @@ export function buildRoofPanels(W: number, D: number, H: number, t: number, spec
 }
 
 /**
- * Attic roof trusses for removable gable roofs (and optional center truss for wide hip roofs).
- * Each truss sits strictly above eaves height Z = H inside the attic triangle, so it never collides with inner walls.
+ * Attic roof trusses:
+ * - Removable gable roofs: 1–2 trusses inside gable walls so the roof lifts off as one rigid piece.
+ * - Fixed gable roofs with a missing gable wall: 1 center support truss so the roof panels remain rigid.
+ * - Hip & pyramid roofs (both fixed and removable): crossed internal truss skeleton interlocked with all 4 roof panels
+ *   (and engaging the outer walls via saddle hooks when mount === 'fixed').
+ * Every truss base sits at eaves height Z = H so it never collides with interior room walls.
  */
-export function buildRoofTrusses(W: number, D: number, H: number, t: number, spec: RoofSpec): TrussSpec[] {
+export function buildRoofTrusses(
+  W: number,
+  D: number,
+  H: number,
+  t: number,
+  spec: RoofSpec,
+  sides: Record<'x0' | 'x1' | 'y0' | 'y1', boolean> = { x0: true, x1: true, y0: true, y1: true },
+): TrussSpec[] {
   const m = computeRoofMetrics(W, D, H, t, spec);
-  if (spec.type !== 'gable' || spec.mount !== 'removable') return [];
-  if (m.rise < 2 * t) return [];
+  if (spec.type === 'flat' || spec.type === 'shed') return [];
 
-  const alongX = spec.ridgeAxis === 'x';
-  const ridgeLen = alongX ? W : D;
-  const outerSpan = alongX ? D : W;
-  const innerSpan = outerSpan - 2 * t;
-  if (innerSpan < 4 * t) return [];
+  const makePts = (innerSpan: number, h: number, heel: number, topFlat: number): [number, number][] => {
+    const half = innerSpan / 2;
+    const hf = topFlat / 2;
+    return hf > EPS
+      ? [[-hf, -h / 2], [hf, -h / 2], [half, h / 2 - heel], [half, h / 2], [-half, h / 2], [-half, h / 2 - heel]]
+      : [[0, -h / 2], [half, h / 2 - heel], [half, h / 2], [-half, h / 2], [-half, h / 2 - heel]];
+  };
 
-  const heel = t * Math.tan(m.pitchRad);
-  if (heel >= m.rise - t) return [];
+  if (spec.type === 'gable') {
+    const alongX = spec.ridgeAxis === 'x';
+    const missingGable = alongX ? !sides.x0 || !sides.x1 : !sides.y0 || !sides.y1;
+    if (spec.mount !== 'removable' && !missingGable) return [];
+    if (m.rise < 2 * t) return [];
 
-  // Positions along ridge axis: right inside the two gable walls (at t + t/2 and ridgeLen - t - t/2), or 1 in center if narrow
-  const positions = ridgeLen >= 5 * t ? [1.5 * t, ridgeLen - 1.5 * t] : ridgeLen >= 3 * t ? [ridgeLen / 2] : [];
-  const half = innerSpan / 2;
+    const ridgeLen = alongX ? W : D;
+    const outerSpan = alongX ? D : W;
+    const innerSpan = outerSpan - 2 * t;
+    if (innerSpan < 4 * t) return [];
+
+    const heel = t * Math.tan(m.pitchRad);
+    if (heel >= m.rise - t) return [];
+
+    const positions =
+      spec.mount === 'removable'
+        ? ridgeLen >= 5 * t
+          ? [1.5 * t, ridgeLen - 1.5 * t]
+          : ridgeLen >= 3 * t
+            ? [ridgeLen / 2]
+            : []
+        : ridgeLen >= 3 * t
+          ? [ridgeLen / 2]
+          : [];
+    const h = m.rise;
+    const pts = makePts(innerSpan, h, heel, 0);
+
+    return positions.map((at, idx): TrussSpec => {
+      const key = positions.length > 1 ? `roof-truss-${idx + 1}` : 'roof-truss';
+      const pose: Pose = alongX
+        ? { o: [at - t / 2, D / 2, H + h / 2], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] }
+        : { o: [W / 2, at - t / 2, H + h / 2], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
+      return {
+        key,
+        kind: 'gable',
+        spanAxis: alongX ? 'y' : 'x',
+        at,
+        innerSpan,
+        outerSpan,
+        topFlat: 0,
+        eavesZ: H,
+        rise: h,
+        pitchRad: m.pitchRad,
+        heel,
+        laps: [],
+        leftRoofKey: alongX ? 'roof-back' : 'roof-left',
+        rightRoofKey: alongX ? 'roof-front' : 'roof-right',
+        leftRoofX: alongX ? W / 2 - at : D / 2 - at,
+        rightRoofX: alongX ? at - W / 2 : at - D / 2,
+        fixedHooks: false,
+        pts,
+        pose,
+      };
+    });
+  }
+
+  // Hip & Pyramid roofs: crossed internal truss skeleton
   const h = m.rise;
-  // Local centered coords: x ∈ [-half, half], y ∈ [-h/2, h/2] (y = -h/2 is peak Z=H+rise, y = h/2 is base Z=H)
-  const pts: [number, number][] = [
-    [0, -h / 2],
-    [half, h / 2 - heel],
-    [half, h / 2],
-    [-half, h / 2],
-    [-half, h / 2 - heel],
-  ];
+  if (h < 3 * t) return [];
+  const innerW = W - 2 * t;
+  const innerD = D - 2 * t;
+  if (innerW < 4 * t || innerD < 4 * t) return [];
 
-  return positions.map((at, idx): TrussSpec => {
-    const key = positions.length > 1 ? `roof-truss-${idx + 1}` : 'roof-truss';
-    // Pose: same convention as walls
-    const pose: Pose = alongX
-      ? { o: [at - t / 2, D / 2, H + h / 2], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] }
-      : { o: [W / 2, at - t / 2, H + h / 2], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
-    return {
-      key,
-      spanAxis: alongX ? 'y' : 'x',
-      at,
-      innerSpan,
-      outerSpan,
+  const fixedHooks = spec.mount === 'fixed';
+
+  if (spec.type === 'pyramid') {
+    const ax = Math.atan2(h, W / 2);
+    const ay = Math.atan2(h, D / 2);
+    const heelX = t * Math.tan(ax);
+    const heelY = t * Math.tan(ay);
+    if (heelX >= h - 1.5 * t || heelY >= h - 1.5 * t) return [];
+
+    // Ensure room for center half-lap slot with horizontal shoulder
+    const sh = Math.min(1.5, t * 0.5);
+    const yShoulder = (t / 2 + sh) * Math.tan(ax);
+    if (h - yShoulder < 2 * Math.max(t, 2.5)) return [];
+
+    return [
+      {
+        key: 'roof-truss-1',
+        kind: 'pyramid',
+        spanAxis: 'x',
+        at: D / 2,
+        innerSpan: innerW,
+        outerSpan: W,
+        topFlat: 0,
+        eavesZ: H,
+        rise: h,
+        pitchRad: ax,
+        heel: heelX,
+        laps: [{ offsetFromCenter: 0, fromTop: true }],
+        leftRoofKey: 'roof-left',
+        rightRoofKey: 'roof-right',
+        leftRoofX: 0,
+        rightRoofX: 0,
+        fixedHooks,
+        pts: makePts(innerW, h, heelX, 0),
+        pose: { o: [W / 2, D / 2 - t / 2, H + h / 2], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] },
+      },
+      {
+        key: 'roof-truss-2',
+        kind: 'pyramid',
+        spanAxis: 'y',
+        at: W / 2,
+        innerSpan: innerD,
+        outerSpan: D,
+        topFlat: 0,
+        eavesZ: H,
+        rise: h,
+        pitchRad: ay,
+        heel: heelY,
+        laps: [{ offsetFromCenter: 0, fromTop: false }],
+        leftRoofKey: 'roof-back',
+        rightRoofKey: 'roof-front',
+        leftRoofX: 0,
+        rightRoofX: 0,
+        fixedHooks,
+        pts: makePts(innerD, h, heelY, 0),
+        pose: { o: [W / 2 - t / 2, D / 2, H + h / 2], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] },
+      },
+    ];
+  }
+
+  // Hip roof: 1 longitudinal spine truss (trapezoid along ridge) + 1 or 2 perpendicular cross trusses
+  const alongX = W >= D;
+  const long = alongX ? W : D;
+  const short = alongX ? D : W;
+  const Lr = Math.max(0, long - short);
+  const heel = t * Math.tan(m.pitchRad);
+  if (heel >= h - 1.5 * t) return [];
+
+  const sh = Math.min(1.5, t * 0.5);
+  const minHalfTop = t / 2 + sh;
+  const yShoulder = Lr / 2 < minHalfTop ? (minHalfTop - Lr / 2) * Math.tan(m.pitchRad) : 0;
+  if (h - yShoulder < 2 * Math.max(t, 2.5)) return [];
+
+  const crossPositions = Lr >= 7 * t ? [short / 2 + 1.5 * t, long - short / 2 - 1.5 * t] : [long / 2];
+  const spineInner = long - 2 * t;
+  const crossInner = short - 2 * t;
+
+  const spineLaps = crossPositions.map((pos) => ({
+    offsetFromCenter: alongX ? pos - W / 2 : D / 2 - pos,
+    fromTop: true,
+  }));
+
+  const out: TrussSpec[] = [
+    {
+      key: 'roof-truss-1',
+      kind: 'hip-spine',
+      spanAxis: alongX ? 'x' : 'y',
+      at: alongX ? D / 2 : W / 2,
+      innerSpan: spineInner,
+      outerSpan: long,
+      topFlat: Lr,
       eavesZ: H,
       rise: h,
       pitchRad: m.pitchRad,
       heel,
-      pts,
-      pose,
-    };
+      laps: spineLaps,
+      leftRoofKey: alongX ? 'roof-left' : 'roof-back',
+      rightRoofKey: alongX ? 'roof-right' : 'roof-front',
+      leftRoofX: 0,
+      rightRoofX: 0,
+      fixedHooks,
+      pts: makePts(spineInner, h, heel, Lr),
+      pose: alongX
+        ? { o: [W / 2, D / 2 - t / 2, H + h / 2], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] }
+        : { o: [W / 2 - t / 2, D / 2, H + h / 2], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] },
+    },
+  ];
+
+  crossPositions.forEach((pos, idx) => {
+    out.push({
+      key: `roof-truss-${idx + 2}`,
+      kind: 'hip-cross',
+      spanAxis: alongX ? 'y' : 'x',
+      at: pos,
+      innerSpan: crossInner,
+      outerSpan: short,
+      topFlat: 0,
+      eavesZ: H,
+      rise: h,
+      pitchRad: m.pitchRad,
+      heel,
+      laps: [{ offsetFromCenter: 0, fromTop: false }],
+      leftRoofKey: alongX ? 'roof-back' : 'roof-left',
+      rightRoofKey: alongX ? 'roof-front' : 'roof-right',
+      leftRoofX: alongX ? W / 2 - pos : D / 2 - pos,
+      rightRoofX: alongX ? pos - W / 2 : pos - D / 2,
+      fixedHooks,
+      pts: makePts(crossInner, h, heel, 0),
+      pose: alongX
+        ? { o: [pos - t / 2, D / 2, H + h / 2], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] }
+        : { o: [W / 2, pos - t / 2, H + h / 2], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] },
+    });
   });
+
+  return out;
+}
+
+/**
+ * Underside positioning rails / stop cleats for removable flat and shed roofs so lift-off roofs
+ * self-center cleanly on the walls and cannot slide off (especially sloped shed roofs!).
+ */
+export function buildRoofRails(
+  W: number,
+  D: number,
+  H: number,
+  t: number,
+  floor: boolean,
+  sides: Record<'x0' | 'x1' | 'y0' | 'y1', boolean>,
+  spec: RoofSpec,
+): RoofRailSpec[] {
+  if (spec.mount !== 'removable' || (spec.type !== 'flat' && spec.type !== 'shed')) return [];
+  const floorZ = floor ? t : 0;
+  const clearH = H - floorZ;
+  if (clearH < 3 * t) return [];
+  const railH = Math.min(2 * t, 6, Math.max(t, clearH * 0.25));
+  const slip = 0.3;
+
+  if (spec.type === 'flat') {
+    if (sides.y0 && sides.y1 && W - 2 * t >= 4 * t && D - 2 * t >= 5 * t) {
+      const length = W - 2 * t - 2 * slip;
+      const yBack = D - t - slip - t / 2;
+      const yFront = t + slip + t / 2;
+      return [
+        {
+          key: 'roof-rail-1',
+          spanAxis: 'x',
+          length,
+          height: railH,
+          roofKey: 'roof',
+          roofY: D / 2 - yBack,
+          roofAxis: 'x',
+          perpPos3D: yBack,
+          pose: { o: [W / 2, yBack - t / 2, H - railH / 2], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] },
+        },
+        {
+          key: 'roof-rail-2',
+          spanAxis: 'x',
+          length,
+          height: railH,
+          roofKey: 'roof',
+          roofY: D / 2 - yFront,
+          roofAxis: 'x',
+          perpPos3D: yFront,
+          pose: { o: [W / 2, yFront - t / 2, H - railH / 2], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] },
+        },
+      ];
+    }
+    if (sides.x0 && sides.x1 && D - 2 * t >= 4 * t && W - 2 * t >= 5 * t) {
+      const length = D - 2 * t - 2 * slip;
+      const xLeft = t + slip + t / 2;
+      const xRight = W - t - slip - t / 2;
+      return [
+        {
+          key: 'roof-rail-1',
+          spanAxis: 'y',
+          length,
+          height: railH,
+          roofKey: 'roof',
+          roofY: xLeft - W / 2,
+          roofAxis: 'y',
+          perpPos3D: xLeft,
+          pose: { o: [xLeft - t / 2, D / 2, H - railH / 2], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] },
+        },
+        {
+          key: 'roof-rail-2',
+          spanAxis: 'y',
+          length,
+          height: railH,
+          roofKey: 'roof',
+          roofY: xRight - W / 2,
+          roofAxis: 'y',
+          perpPos3D: xRight,
+          pose: { o: [xRight - t / 2, D / 2, H - railH / 2], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] },
+        },
+      ];
+    }
+    return [];
+  }
+
+  // Removable shed roof: perpendicular stop cleats inside the low wall (stops downhill sliding!) and high wall
+  const m = computeRoofMetrics(W, D, H, t, spec);
+  const alongY = spec.shedDir === 'front' || spec.shedDir === 'back';
+  const run = alongY ? D : W;
+  const cross = alongY ? W : D;
+  if (cross - 2 * t < 4 * t || run - 2 * t < 4 * t) return [];
+
+  const ca = Math.cos(m.pitchRad),
+    sa = Math.sin(m.pitchRad);
+  const Ls = run / ca;
+  const length = cross - 2 * t - 2 * slip;
+  const yLow = Ls / 2 - (t + slip) / ca - t / 2;
+  const yHigh = -Ls / 2 + (t + slip + railH * sa) / ca + t / 2;
+
+  const sideOn: Record<OuterWallKey, boolean> = { front: sides.y1, back: sides.y0, left: sides.x0, right: sides.x1 };
+  const opp: Record<OuterWallKey, OuterWallKey> = { front: 'back', back: 'front', left: 'right', right: 'left' };
+  const ro: V3 = [W / 2, D / 2, H + m.rise / 2];
+  const basis: Record<OuterWallKey, { u: V3; v: V3; n: V3 }> = {
+    front: { u: [1, 0, 0], v: [0, -ca, -sa], n: [0, -sa, ca] },
+    back: { u: [-1, 0, 0], v: [0, ca, -sa], n: [0, sa, ca] },
+    left: { u: [0, -1, 0], v: [-ca, 0, -sa], n: [-sa, 0, ca] },
+    right: { u: [0, 1, 0], v: [ca, 0, -sa], n: [sa, 0, ca] },
+  };
+  const b = basis[spec.shedDir];
+
+  const makeCleat = (key: string, yc: number): RoofRailSpec => {
+    const o: V3 = [
+      ro[0] + (yc - t / 2) * b.v[0] - (railH / 2) * b.n[0],
+      ro[1] + (yc - t / 2) * b.v[1] - (railH / 2) * b.n[1],
+      ro[2] + (yc - t / 2) * b.v[2] - (railH / 2) * b.n[2],
+    ];
+    const perpPos3D = alongY ? ro[1] + yc * b.v[1] : ro[0] + yc * b.v[0];
+    return {
+      key,
+      spanAxis: alongY ? 'x' : 'y',
+      length,
+      height: railH,
+      roofKey: 'roof',
+      roofY: yc,
+      roofAxis: 'x',
+      perpPos3D,
+      pose: {
+        o,
+        u: b.u,
+        v: [-b.n[0], -b.n[1], -b.n[2]],
+        n: b.v,
+      },
+    };
+  };
+
+  const candidates: number[] = [];
+  if (sideOn[spec.shedDir] && yLow > -Ls / 2 + t && yLow < Ls / 2 - t) candidates.push(yLow);
+  if (sideOn[opp[spec.shedDir]] && yHigh > -Ls / 2 + t && yHigh < Ls / 2 - t && (!candidates.length || yLow - yHigh >= 2.5 * t)) {
+    candidates.push(yHigh);
+  }
+  return candidates.map((yc, idx) => makeCleat(candidates.length > 1 ? `roof-rail-${idx + 1}` : 'roof-rail', yc));
 }
 
 /** Roof outline and ridge/hip lines in plan coordinates (inner rect is [0..w] × [0..d], outer walls at [-t..w+t] × [-t..d+t]) */
