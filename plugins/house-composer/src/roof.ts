@@ -5,6 +5,15 @@
 // Every roof panel is returned in its own centered 2D plane (y down = ridge toward eaves) with outer face UP
 // on the laser bed (−(u×v) = outward normal n), so engraved roof patterns always sit on the outside.
 import type { Pose, SubPath, V3 } from '../../../sdk/ts';
+import {
+  ensureCCW,
+  minExteriorBayGaps,
+  offsetOrthoPoly,
+  orthogonalStraightSkeleton,
+  pointInPoly as skelPointInPoly,
+  polyChordIntervals,
+  type XY,
+} from './skeleton';
 
 export type RoofType = 'flat' | 'gable' | 'shed' | 'hip' | 'pyramid';
 export type RoofSizeMode = 'angle' | 'height';
@@ -139,8 +148,42 @@ export interface RoofRailSpec {
 const DEG = Math.PI / 180;
 const EPS = 1e-6;
 
+/** Per-axis roof overhang [ox, oy] along 3D X and Y */
+export function roofOverhangXY(spec: RoofSpec): [number, number] {
+  const ee = spec.overhang;
+  const eg = spec.type === 'gable' || spec.type === 'shed' ? spec.gableOverhang : ee;
+  const ox =
+    spec.type === 'gable'
+      ? spec.ridgeAxis === 'x'
+        ? eg
+        : ee
+      : spec.type === 'shed'
+        ? spec.shedDir === 'front' || spec.shedDir === 'back'
+          ? eg
+          : ee
+        : ee;
+  const oy =
+    spec.type === 'gable'
+      ? spec.ridgeAxis === 'x'
+        ? ee
+        : eg
+      : spec.type === 'shed'
+        ? spec.shedDir === 'front' || spec.shedDir === 'back'
+          ? ee
+          : eg
+        : ee;
+  return [ox, oy];
+}
+
 /** Compute roof rise, pitch angles, ridge length, eaves drop and overall height */
-export function computeRoofMetrics(W: number, D: number, H: number, t: number, spec: RoofSpec): RoofMetrics {
+export function computeRoofMetrics(
+  W: number,
+  D: number,
+  H: number,
+  t: number,
+  spec: RoofSpec,
+  outerPoly3D?: XY[] | null,
+): RoofMetrics {
   const flushFlat = spec.type === 'flat' && spec.mount === 'fixed' && spec.overhang < EPS;
   if (spec.type === 'flat') {
     return {
@@ -156,6 +199,7 @@ export function computeRoofMetrics(W: number, D: number, H: number, t: number, s
     };
   }
 
+  const isShaped = !!(outerPoly3D && outerPoly3D.length > 4);
   let run = 0;
   let ridgeAxis: 'x' | 'y' = spec.ridgeAxis;
   let ridgeLength = 0;
@@ -169,6 +213,12 @@ export function computeRoofMetrics(W: number, D: number, H: number, t: number, s
     run = alongY ? D : W;
     ridgeAxis = alongY ? 'x' : 'y';
     ridgeLength = alongY ? W : D;
+  } else if (isShaped) {
+    // Shaped hip / pyramid: use the exact orthogonal straight-skeleton half-span of the widest wing
+    const skel = orthogonalStraightSkeleton(outerPoly3D!);
+    run = Math.max(EPS, skel.maxS);
+    ridgeAxis = W >= D ? 'x' : 'y';
+    ridgeLength = skel.ridges.reduce((acc, r) => acc + (r.b - r.a), 0);
   } else if (spec.type === 'hip') {
     // Equal pitch on all 4 faces: ridge runs along the longer side
     ridgeAxis = W >= D ? 'x' : 'y';
@@ -192,13 +242,13 @@ export function computeRoofMetrics(W: number, D: number, H: number, t: number, s
   }
 
   let pitchRad2 = pitchRad;
-  if (spec.type === 'pyramid') {
+  if (spec.type === 'pyramid' && !isShaped) {
     const runLong = Math.max(W, D) / 2;
     pitchRad2 = runLong > EPS ? Math.atan2(rise, runLong) : pitchRad;
   }
 
   const eavesDrop =
-    spec.type === 'pyramid'
+    spec.type === 'pyramid' && !isShaped
       ? (spec.overhang / Math.max(EPS, run)) * rise
       : spec.overhang * Math.tan(pitchRad);
 
@@ -217,13 +267,37 @@ export function computeRoofMetrics(W: number, D: number, H: number, t: number, s
 }
 
 /** Validate roof parameters against house dimensions and outline shape */
-export function validateRoof(W: number, D: number, H: number, t: number, spec: RoofSpec, isRectOutline: boolean): RoofIssue[] {
+export function validateRoof(
+  W: number,
+  D: number,
+  H: number,
+  t: number,
+  spec: RoofSpec,
+  isRectOutline: boolean,
+  outerPoly3D?: XY[] | null,
+): RoofIssue[] {
   const issues: RoofIssue[] = [];
-  if (!isRectOutline && spec.type !== 'flat') {
-    issues.push({ key: 'roofType', level: 'error', code: 'roof-needs-rect' });
-    return issues;
+  if (!isRectOutline && spec.type === 'pyramid') {
+    issues.push({ key: 'roofType', level: 'warn', code: 'roof-pyramid-shaped' });
   }
-  const m = computeRoofMetrics(W, D, H, t, spec);
+  // On concave L/U footprints, ensure roof overhangs do not self-intersect across narrow courtyards/bays
+  if (!isRectOutline && outerPoly3D && outerPoly3D.length > 4) {
+    const [ox, oy] = roofOverhangXY(spec);
+    const { gapX, gapY } = minExteriorBayGaps(outerPoly3D);
+    const badX = ox > EPS && 2 * ox >= gapX - 1;
+    const badY = oy > EPS && 2 * oy >= gapY - 1;
+    if (badX || badY) {
+      const lim = Math.min(badX ? gapX : Infinity, badY ? gapY : Infinity);
+      const maxOv = Math.max(0, Math.floor((lim - 1) / 2));
+      const key =
+        (spec.type === 'gable' && ((badX && spec.ridgeAxis === 'x') || (badY && spec.ridgeAxis === 'y'))) ||
+        (spec.type === 'shed' && ((badX && (spec.shedDir === 'front' || spec.shedDir === 'back')) || (badY && (spec.shedDir === 'left' || spec.shedDir === 'right'))))
+          ? 'roofGableOverhang'
+          : 'roofOverhang';
+      issues.push({ key, level: 'error', code: 'roof-overhang-notch', values: { max: maxOv } });
+    }
+  }
+  const m = computeRoofMetrics(W, D, H, t, spec, outerPoly3D);
   if (spec.type === 'flat') {
     if (spec.mount === 'fixed' && spec.overhang > EPS && spec.overhang < t - EPS) {
       issues.push({ key: 'roofOverhang', level: 'error', code: 'roof-overhang-web', values: { min: t } });
@@ -1358,6 +1432,185 @@ export function buildChimneyGeom(
   };
 }
 
+/** Check whether a 3D square [cx-r .. cx+r] × [cy-r .. cy+r] lies strictly inside an orthogonal polygon */
+function boxInsideOrthoPoly(poly: XY[], cx: number, cy: number, r: number): boolean {
+  const pts: XY[] = [
+    [cx, cy],
+    [cx - r, cy - r],
+    [cx + r, cy - r],
+    [cx + r, cy + r],
+    [cx - r, cy + r],
+    [cx, cy - r],
+    [cx, cy + r],
+    [cx - r, cy],
+    [cx + r, cy],
+  ];
+  for (const [px, py] of pts) {
+    if (!skelPointInPoly(poly, px, py)) return false;
+  }
+  // Ensure no polygon edge crosses the box interior
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const [x0, y0] = poly[i];
+    const [x1, y1] = poly[(i + 1) % n];
+    if (Math.abs(y0 - y1) < EPS) {
+      if (y0 > cy - r && y0 < cy + r && Math.max(x0, x1) > cx - r && Math.min(x0, x1) < cx + r) return false;
+    } else {
+      if (x0 > cx - r && x0 < cx + r && Math.max(y0, y1) > cy - r && Math.min(y0, y1) < cy + r) return false;
+    }
+  }
+  return true;
+}
+
+/** Find a valid 3D chimney center (cx, cy) inside a shaped L/U/C footprint for flat, shed, or gable roofs */
+export function findShapedChimneySpot(
+  outerPoly3D: XY[],
+  W: number,
+  D: number,
+  H: number,
+  t: number,
+  spec: RoofSpec,
+  chimney: ChimneySpec,
+): { cx: number; cy: number; cz: number } | null {
+  if (!chimney.enabled || (spec.type !== 'flat' && spec.type !== 'shed' && spec.type !== 'gable')) return null;
+  const poly = ensureCCW(outerPoly3D);
+  const m = computeRoofMetrics(W, D, H, t, spec, poly);
+  const tanA = Math.tan(m.pitchRad);
+  const S = chimney.size;
+  const rClear = S / 2 + t + 2;
+  const targetFrac = chimney.pos === 'left' ? 0.25 : chimney.pos === 'right' ? 0.75 : 0.5;
+  const targetX = W * targetFrac;
+  const targetY = D * 0.5;
+
+  let best: { cx: number; cy: number; score: number } | null = null;
+  const step = Math.max(2, Math.min(4, S / 4));
+  for (let cx = rClear; cx <= W - rClear + EPS; cx += step) {
+    for (let cy = rClear; cy <= D - rClear + EPS; cy += step) {
+      if (!boxInsideOrthoPoly(poly, cx, cy, rClear)) continue;
+      // On gable roofs, keep chimney cleanly on one slope (clear of the ridge line!)
+      if (spec.type === 'gable') {
+        const ridgeClear = S / 2 + t * tanA + 2.5;
+        if (spec.ridgeAxis === 'x' && Math.abs(cy - D / 2) < ridgeClear) continue;
+        if (spec.ridgeAxis === 'y' && Math.abs(cx - W / 2) < ridgeClear) continue;
+      }
+      const dist = Math.hypot(cx - targetX, (cy - targetY) * 0.6);
+      if (!best || dist < best.score) best = { cx, cy, score: dist };
+    }
+  }
+  if (!best) return null;
+
+  let cz = m.flushFlat ? H - t : H;
+  if (spec.type === 'shed') {
+    const s =
+      spec.shedDir === 'front'
+        ? best.cy
+        : spec.shedDir === 'back'
+          ? D - best.cy
+          : spec.shedDir === 'left'
+            ? best.cx
+            : W - best.cx;
+    cz = H + s * tanA;
+  } else if (spec.type === 'gable') {
+    const dEaves = spec.ridgeAxis === 'x' ? Math.min(best.cy, D - best.cy) : Math.min(best.cx, W - best.cx);
+    cz = H + dEaves * tanA;
+  }
+  return { cx: best.cx, cy: best.cy, cz };
+}
+
+/** Compute exact chimney geometry on a shaped L/U/C footprint against the built shaped roof panels */
+export function buildShapedChimneyGeom(
+  outerPoly3D: XY[],
+  W: number,
+  D: number,
+  H: number,
+  t: number,
+  floor: boolean,
+  spec: RoofSpec,
+  roofPanels: RoofPanelGeom[],
+  chimney: ChimneySpec,
+  clearance = 0,
+): ChimneyGeom | null {
+  const spot = findShapedChimneySpot(outerPoly3D, W, D, H, t, spec, chimney);
+  if (!spot) return null;
+  const m = computeRoofMetrics(W, D, H, t, spec, outerPoly3D);
+  const S = chimney.size;
+  const cl = Math.max(0, clearance);
+  const ca = Math.cos(m.pitchRad);
+  const tanA = Math.tan(m.pitchRad);
+
+  // Project 3D spot (cx, cy, cz) onto each roof panel and find the one whose 2D polygon contains it
+  for (const rp of roofPanels) {
+    if (!rp.pts.length) continue;
+    const po = rp.pose;
+    const dx = spot.cx - po.o[0];
+    const dy = spot.cy - po.o[1];
+    const dz = spot.cz - po.o[2];
+    const distPlane = Math.abs(dx * po.n[0] + dy * po.n[1] + dz * po.n[2]);
+    if (distPlane > 0.5) continue;
+    const xr = dx * po.u[0] + dy * po.u[1] + dz * po.u[2];
+    const yr = dx * po.v[0] + dy * po.v[1] + dz * po.v[2];
+    if (!skelPointInPoly(rp.pts, xr, yr)) continue;
+
+    const hw = (S + cl) / 2;
+    const yTopHole = yr - S / (2 * ca) - t * tanA - cl / 2;
+    const yBotHole = yr + S / (2 * ca) + cl / 2;
+    const floorZ = floor ? t : 0;
+    const zLow = spot.cz - (S / 2) * tanA;
+    const zHigh = spot.cz + (S / 2) * tanA;
+    const zBot = Math.max(floorZ + 2, zLow - t / ca - 1.5);
+    const zTop = Math.max(H + m.rise + Math.max(8, S * 0.6), zHigh + Math.max(10, S * 0.75));
+    return {
+      roofKey: rp.key,
+      cx: spot.cx,
+      cy: spot.cy,
+      size: S,
+      zBot,
+      zTop,
+      holeBox: [xr - hw, yTopHole, xr + hw, yBotHole],
+    };
+  }
+  return null;
+}
+
+/** Roof overhang outline & ridge/hip/valley lines in Plan view coordinates for a shaped L/U/C footprint */
+export function roofPlanLinesShaped(
+  outerPoly3D: XY[],
+  W: number,
+  D: number,
+  t: number,
+  spec: RoofSpec,
+): { outline: [number, number][]; ridges: [[number, number], [number, number]][] } {
+  const poly = ensureCCW(outerPoly3D);
+  const toPlan = ([X, Y]: XY): [number, number] => [X - t, D - t - Y];
+  const [ox, oy] = roofOverhangXY(spec);
+  const { gapX, gapY } = minExteriorBayGaps(poly);
+  const safeOx = ox > EPS && 2 * ox < gapX - 1 ? ox : 0;
+  const safeOy = oy > EPS && 2 * oy < gapY - 1 ? oy : 0;
+  const eavesPoly = offsetOrthoPoly(poly, safeOx, safeOy);
+  const outline = eavesPoly.map(toPlan);
+  const ridges: [[number, number], [number, number]][] = [];
+
+  if (spec.type === 'gable') {
+    const axis = spec.ridgeAxis;
+    const at = axis === 'x' ? D / 2 : W / 2;
+    const ivs = polyChordIntervals(eavesPoly, axis, at);
+    for (const [a, b] of ivs) {
+      ridges.push(axis === 'x' ? [toPlan([a, at]), toPlan([b, at])] : [toPlan([at, a]), toPlan([at, b])]);
+    }
+  } else if (spec.type === 'hip' || spec.type === 'pyramid') {
+    const sk = orthogonalStraightSkeleton(eavesPoly);
+    for (const r of sk.ridges) {
+      ridges.push(
+        r.axis === 'x' ? [toPlan([r.a, r.at]), toPlan([r.b, r.at])] : [toPlan([r.at, r.a]), toPlan([r.at, r.b])],
+      );
+    }
+    for (const [a, b] of sk.diagonals) {
+      ridges.push([toPlan(a), toPlan(b)]);
+    }
+  }
+  return { outline, ridges };
+}
+
 /** Validate chimney size and clearance inside its host roof panel */
 export function validateChimney(
   W: number,
@@ -1369,14 +1622,23 @@ export function validateChimney(
   chimney: ChimneySpec,
   isRectOutline: boolean,
   clearance = 0,
+  outerPoly3D?: XY[] | null,
 ): RoofIssue[] {
   if (!chimney.enabled) return [];
-  if (!isRectOutline || (spec.type !== 'gable' && spec.type !== 'shed' && spec.type !== 'flat')) return [];
+  if (spec.type !== 'gable' && spec.type !== 'shed' && spec.type !== 'flat') return [];
 
   const minS = Math.max(10, Math.ceil(3.2 * t));
   if (chimney.size < minS) {
     return [{ key: 'chimneySize', level: 'error', code: 'chimney-small', values: { min: minS } }];
   }
+
+  if (!isRectOutline) {
+    if (!outerPoly3D || outerPoly3D.length < 4) return [];
+    const spot = findShapedChimneySpot(outerPoly3D, W, D, H, t, spec, chimney);
+    if (!spot) return [{ key: 'chimneySize', level: 'error', code: 'chimney-no-space' }];
+    return [];
+  }
+
   const panels = buildRoofPanels(W, D, H, t, spec);
   const g = buildChimneyGeom(W, D, H, t, floor, spec, panels, chimney, clearance);
   if (!g) return [];

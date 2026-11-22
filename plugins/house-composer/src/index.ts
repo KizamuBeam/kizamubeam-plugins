@@ -27,6 +27,7 @@ import {
   housePoses,
   houseWallHosts,
   innerHeight,
+  outlineOuterPoly3D,
   turnOver,
   TURNED_OVER,
   wallPanels,
@@ -223,28 +224,25 @@ function compute(p: P) {
 
   // Validate roof & optional chimney against actual outline shape & dimensions
   const rect = isRect(box.pts);
-  issues.push(...validateRoof(db.W, db.D, db.H, db.t, db.roof, rect));
+  const outerPoly3D = rect ? null : outlineOuterPoly3D(box.model, db.W, db.D, db.t);
+  issues.push(...validateRoof(db.W, db.D, db.H, db.t, db.roof, rect, outerPoly3D));
   if (db.chimney?.enabled) {
-    issues.push(...validateChimney(db.W, db.D, db.H, db.t, db.floor, db.roof, db.chimney, rect, db.clearance));
+    issues.push(...validateChimney(db.W, db.D, db.H, db.t, db.floor, db.roof, db.chimney, rect, db.clearance, outerPoly3D));
   }
 
-  // Validate optional intermediate floor slab
+  // Validate optional intermediate floor slab (works on rectangular AND L/U-shaped footprints!)
   let validMidFloorZ: number | undefined;
   if (db.midFloor) {
-    if (!rect) {
-      issues.push({ key: 'midFloor', level: 'error', code: 'midfloor-needs-rect' });
+    const rm = computeRoofMetrics(db.W, db.D, db.H, db.t, db.roof, outerPoly3D);
+    const floorZ = db.floor ? db.t : 0;
+    const topZ = rm.flushFlat ? db.H - db.t : db.H;
+    const minMid = floorZ + 2 * db.t + 6;
+    const maxMid = topZ - 3 * db.t - 4;
+    const mz = db.midFloorHeight ?? 50;
+    if (mz < minMid - 0.01 || mz > maxMid + 0.01) {
+      issues.push({ key: 'midFloorHeight', level: 'error', code: 'midfloor-bounds', values: { min: minMid, max: Math.max(minMid, maxMid) } });
     } else {
-      const rm = computeRoofMetrics(db.W, db.D, db.H, db.t, db.roof);
-      const floorZ = db.floor ? db.t : 0;
-      const topZ = rm.flushFlat ? db.H - db.t : db.H;
-      const minMid = floorZ + 2 * db.t + 6;
-      const maxMid = topZ - 3 * db.t - 4;
-      const mz = db.midFloorHeight ?? 50;
-      if (mz < minMid - 0.01 || mz > maxMid + 0.01) {
-        issues.push({ key: 'midFloorHeight', level: 'error', code: 'midfloor-bounds', values: { min: minMid, max: Math.max(minMid, maxMid) } });
-      } else {
-        validMidFloorZ = mz;
-      }
+      validMidFloorZ = mz;
     }
   }
 
@@ -288,7 +286,9 @@ function checkIssues(parts: Record<string, SubPath[]>, kerf: number, roofType: R
   // flags as thin webs/web-cut; keep all checks active on walls, openings, joints, roof trusses & rails, and check-too-big.
   const isAngledRoofPanel = (k: string) =>
     (roofType === 'hip' || roofType === 'pyramid') &&
-    (k === 'roof-front' || k === 'roof-back' || k === 'roof-left' || k === 'roof-right');
+    k.startsWith('roof-') &&
+    !k.startsWith('roof-truss') &&
+    !k.startsWith('roof-rail');
   return found
     .filter((f) => f.level !== 'info' && !((f.code === 'check-web' || f.code === 'check-web-cut') && f.parts.length === 1 && isAngledRoofPanel(f.parts[0])))
     .map((f) => ({ level: f.level as 'error' | 'warn', code: f.code, ...(f.values ? { values: f.values } : {}) }));
@@ -336,6 +336,8 @@ function surfaceCtx(p: P): HouseSurfaceCtx | null {
     e: q.e,
     h: q.h,
   }));
+  const isShaped = !!(box && !isRect(box.pts));
+  const outerPoly3D = isShaped && box ? outlineOuterPoly3D(box.model, db.W, db.D, db.t) : null;
   return {
     plan: pl,
     W: db.W,
@@ -350,7 +352,8 @@ function surfaceCtx(p: P): HouseSurfaceCtx | null {
     frameWidth: db.frameWidth,
     mullionWidth: db.mullionWidth,
     midFloorZ: db.midFloor ? db.midFloorHeight : undefined,
-    isShaped: !!(box && !isRect(box.pts)),
+    isShaped,
+    outerPoly3D,
     innerWalls,
   };
 }
@@ -692,9 +695,18 @@ definePlugin<P>({
     for (const key of keys) {
       const fm = /^frame-(\d+)$/.exec(key);
       if (fm) labels[key] = { code: 'part.frame', values: { id: Number(fm[1]) } };
+      const rmNum = /^roof-(\d+)$/.exec(key);
+      if (rmNum) labels[key] = { code: 'part.roof-n', values: { id: Number(rmNum[1]) } };
+      const rmSide = /^roof-(front|back|left|right)-(\d+)$/.exec(key);
+      if (rmSide) labels[key] = [{ code: `part.roof-${rmSide[1]}` }, ` ${rmSide[2]}`];
+      const rtNum = /^roof-truss-(\d+)$/.exec(key);
+      if (rtNum && Number(rtNum[1]) > 3) labels[key] = { code: 'part.roof-truss-n', values: { id: Number(rtNum[1]) } };
+      const rrNum = /^roof-rail-(\d+)$/.exec(key);
+      if (rrNum && Number(rrNum[1]) > 2) labels[key] = { code: 'part.roof-rail-n', values: { id: Number(rrNum[1]) } };
     }
 
-    const rm = computeRoofMetrics(c.d.W, c.d.D, c.d.H, c.d.t, c.d.roof);
+    const outerPoly3D = isRect(c.box.pts) ? null : outlineOuterPoly3D(c.box.model, c.d.W, c.d.D, c.d.t);
+    const rm = computeRoofMetrics(c.d.W, c.d.D, c.d.H, c.d.t, c.d.roof, outerPoly3D);
     const doors = c.openings.filter((o) => o.kind === 'door').length;
     const windows = c.openings.filter((o) => o.kind === 'window').length;
 
