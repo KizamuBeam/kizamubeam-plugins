@@ -4,8 +4,10 @@
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = resolve(new URL('..', import.meta.url).pathname);
+// fileURLToPath, not .pathname: on Windows .pathname gives /E:/… and no plugin folder is found
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const outDir = resolve(process.argv[2] ?? join(root, '_site'));
 const pluginsDir = join(root, 'plugins');
 const CATALOG_FORMAT = 'kizamubeam-catalog';
