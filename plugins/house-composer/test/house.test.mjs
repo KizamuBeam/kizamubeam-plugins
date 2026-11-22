@@ -1160,5 +1160,142 @@ test('Block 2.3: fixed gable roof with a missing gable wall adds a centered supp
   assert.ok(trussTenons.length >= 2, 'Expected support truss to tenon into both gable roof slopes');
 });
 
+test('Block 3.1: inner elevation view renders clickable wall switcher pills and targets the chosen interior wall', () => {
+  const { plugin } = loadPlugin();
+  const p = {
+    ...defaultParams(),
+    width: 140,
+    depth: 100,
+    walls: JSON.stringify([
+      { id: 1, axis: 'v', pos: 45, from: 0, to: 94 },
+      { id: 2, axis: 'v', pos: 90, from: 0, to: 94 },
+    ]),
+    wallsRef: JSON.stringify([134, 94]),
+    openings: '[]',
+  };
+
+  const d1 = plugin.draw({ view: 'inner', state: null, selected: { openings: -1, walls: -1 }, have: [], params: p });
+  assert.ok(d1.items.some((it) => it.type === 'line' && it.id === 'pickwall:1'), 'Expected pickwall:1 pill');
+  assert.ok(d1.items.some((it) => it.type === 'line' && it.id === 'pickwall:2'), 'Expected pickwall:2 pill');
+
+  // Click pickwall:2 pill to switch directly to wall-2
+  const picked = plugin.onSurface({
+    event: { type: 'down', x: 0, y: 0, hit: 'pickwall:2' },
+    surface: { view: 'inner', state: null, selected: { openings: -1, walls: -1 } },
+    params: p,
+  });
+  assert.equal(picked?.state?.wallKey, 'wall-2');
+
+  // Double-click in 'inner' view while state.wallKey='wall-2' adds an opening onto wall-2
+  const added = plugin.onSurface({
+    event: { type: 'dblclick', x: 47, y: 55 },
+    surface: { view: 'inner', state: picked.state, selected: { openings: -1, walls: -1 } },
+    params: p,
+  });
+  assert.ok(added?.patch?.openings, 'Expected double-click on inner wall-2 to create an opening');
+  const ops = JSON.parse(added.patch.openings);
+  assert.equal(ops.length, 1);
+  assert.equal(ops[0].wall, 'wall-2');
+});
+
+test('Block 3.2: modern & cottage facade presets, host filtering, clearOpenings, duplicate & mirror actions', () => {
+  const { plugin } = loadPlugin();
+  const base = defaultParams();
+
+  // Every facade preset produces valid, buildable openings
+  for (const action of ['presetClassic', 'presetModern', 'presetCottage']) {
+    const ev = plugin.onEvent({ action, params: base, inputs: {} });
+    assert.ok(ev?.patch?.openings, `${action} should return openings patch`);
+    const ops = JSON.parse(ev.patch.openings);
+    assert.ok(ops.length >= 4, `${action} should generate at least 4 openings, got ${ops.length}`);
+    const nextP = { ...base, ...ev.patch };
+    const errs = plugin.validate(nextP).filter((i) => i.level === 'error');
+    assert.equal(errs.length, 0, `${action} failed validation: ${JSON.stringify(errs)}`);
+    const res = plugin.generate(nextP);
+    assert.ok(res.parts.length >= 5);
+    if (action === 'presetCottage') {
+      assert.ok(
+        ops.some((o) => o.style === 'round' && (o.wall === 'left' || o.wall === 'right')),
+        'Cottage preset on gable house should add round gable attic windows',
+      );
+    }
+  }
+
+  // Host-aware preset skips openings on disabled back wall!
+  const noBack = { ...base, wallBack: false };
+  const evNoBack = plugin.onEvent({ action: 'presetModern', params: noBack, inputs: {} });
+  const opsNoBack = JSON.parse(evNoBack.patch.openings);
+  assert.ok(!opsNoBack.some((o) => o.wall === 'back'), 'Preset must skip disabled back wall');
+  assert.equal(plugin.validate({ ...noBack, ...evNoBack.patch }).filter((i) => i.level === 'error').length, 0);
+
+  // clearOpenings resets to []
+  const cleared = plugin.onEvent({ action: 'clearOpenings', params: base, inputs: {} });
+  assert.equal(cleared?.patch?.openings, '[]');
+
+  // duplicateOpening mirrors a left-side window onto its symmetric right counterpart (120 - 28 = 92)
+  const oneWin = {
+    ...base,
+    openings: JSON.stringify([{ id: 1, wall: 'front', kind: 'window', style: 'cross', x: 28, y: 18, w: 18, h: 20 }]),
+  };
+  const dupRes = plugin.onEvent({ action: 'duplicateOpening', params: oneWin, inputs: {}, row: 0 });
+  const dupOps = JSON.parse(dupRes.patch.openings);
+  assert.equal(dupOps.length, 2);
+  assert.equal(dupOps[1].x, 92);
+  assert.equal(dupOps[1].w, 18);
+
+  // mirrorOpening flips x across wall center
+  const mirRes = plugin.onEvent({ action: 'mirrorOpening', params: oneWin, inputs: {}, row: 0 });
+  assert.equal(JSON.parse(mirRes.patch.openings)[0].x, 92);
+});
+
+test('Block 3.3: elevation live warn highlighting, symmetric mirror snap, and plan compass side labels', () => {
+  const { plugin } = loadPlugin();
+  const base = defaultParams();
+
+  // Overlapping openings on front wall immediately draw with style='warn'
+  const badP = {
+    ...base,
+    openings: JSON.stringify([
+      { id: 1, wall: 'front', kind: 'window', style: 'rect', x: 50, y: 20, w: 20, h: 20 },
+      { id: 2, wall: 'front', kind: 'window', style: 'rect', x: 58, y: 20, w: 20, h: 20 },
+    ]),
+  };
+  const elevBad = plugin.draw({ view: 'front', state: null, selected: { openings: 0, walls: -1 }, have: [], params: badP });
+  assert.ok(
+    elevBad.items.some((it) => it.type === 'line' && it.id === 'op:1' && it.style === 'warn'),
+    'Invalid overlapping opening should render with warn style in elevation view',
+  );
+
+  // Symmetric mirror snap: dragging window #2 close to W - x1 (120 - 28 = 92) snaps to exact 92!
+  const snapP = {
+    ...base,
+    openings: JSON.stringify([
+      { id: 1, wall: 'front', kind: 'window', style: 'rect', x: 28, y: 20, w: 16, h: 18 },
+      { id: 2, wall: 'front', kind: 'window', style: 'rect', x: 85, y: 20, w: 16, h: 18 },
+    ]),
+  };
+  const down = plugin.onSurface({
+    event: { type: 'down', x: 85, y: 40, hit: 'op:2' },
+    surface: { view: 'front', state: null, selected: { openings: 1, walls: -1 } },
+    params: snapP,
+  });
+  const moved = plugin.onSurface({
+    event: { type: 'move', x: 91, y: 40 }, // 85 + 6 = 91 -> within snapDist=3 of mirror 92!
+    surface: { view: 'front', state: down.state, selected: { openings: 1, walls: -1 } },
+    params: snapP,
+  });
+  assert.equal(moved.state.openings[1].x, 92, 'Expected drag near symmetric counterpart to snap to 92');
+
+  // Plan view renders all 4 side compass labels
+  const plan = plugin.draw({ view: 'plan', state: null, selected: { openings: -1, walls: -1 }, have: [], params: base });
+  for (const code of ['view.front', 'view.back', 'view.left', 'view.right']) {
+    assert.ok(
+      plan.items.some((it) => it.type === 'text' && typeof it.text === 'object' && it.text.code === code),
+      `Expected plan compass label ${code}`,
+    );
+  }
+});
+
+
 
 

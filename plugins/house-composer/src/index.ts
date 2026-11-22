@@ -10,7 +10,10 @@ import { buildModel, EPS, mergeWalls, readLayout, scaleLayout, unify, writeLayou
 import { bbox, isRect } from './outline';
 import {
   classicFacadePreset,
+  cottageFacadePreset,
+  duplicateOpeningOnWall,
   findOpeningSpot,
+  modernFacadePreset,
   readOpenings,
   scaleOpenings,
   validateOpenings,
@@ -300,6 +303,7 @@ function surfaceCtx(p: P): HouseSurfaceCtx | null {
     engraveFrames: db.engraveFrames,
     frameWidth: db.frameWidth,
     mullionWidth: db.mullionWidth,
+    isShaped: !!(box && !isRect(box.pts)),
     innerWalls,
   };
 }
@@ -512,15 +516,29 @@ definePlugin<P>({
       };
     }
 
-    if (action === 'presetClassic') {
+    if (action === 'presetClassic' || action === 'presetModern' || action === 'presetCottage') {
       const W = ctx ? ctx.W : params.width;
       const D = ctx ? ctx.D : params.depth;
       const H = ctx ? ctx.H : params.height;
       const t = ctx ? ctx.t : params.thickness;
-      const preset = classicFacadePreset(W, D, H, t, !!params.floor);
+      const mw = ctx ? ctx.mullionWidth : Math.max(1, Number(params.mullionWidth) || 2);
+      const preset =
+        action === 'presetModern'
+          ? modernFacadePreset(W, D, H, t, !!params.floor, ctx?.hosts, mw)
+          : action === 'presetCottage'
+            ? cottageFacadePreset(W, D, H, t, !!params.floor, ctx?.hosts, ctx?.roof ?? roofOf(params), mw)
+            : classicFacadePreset(W, D, H, t, !!params.floor, ctx?.hosts, mw);
       return {
         patch: { openings: writeOpenings(preset) },
         select: { openings: preset.length ? 0 : -1 },
+      };
+    }
+
+    if (action === 'clearOpenings') {
+      return {
+        patch: { openings: '[]' },
+        select: { openings: -1 },
+        ...(surface ? { state: null } : {}),
       };
     }
 
@@ -538,7 +556,12 @@ definePlugin<P>({
       return {
         patch: { openings: writeOpenings(next) },
         select: { openings: row },
-        ...(surface ? { view: nextWall.startsWith('wall-') ? 'inner' : nextWall, state: { selId: cur.id } } : {}),
+        ...(surface
+          ? {
+              view: nextWall.startsWith('wall-') ? 'inner' : nextWall,
+              state: nextWall.startsWith('wall-') ? { selId: cur.id, wallKey: nextWall } : { selId: cur.id },
+            }
+          : {}),
       };
     }
 
@@ -549,6 +572,34 @@ definePlugin<P>({
       const cx = Math.round((hostWall.width / 2) * 100) / 100;
       const next = ops.map((o, i) => (i === row ? { ...o, x: cx } : o));
       return { patch: { openings: writeOpenings(next) }, select: { openings: row } };
+    }
+
+    if (action === 'mirrorOpening' && row !== undefined && row >= 0 && row < ops.length && ctx) {
+      const cur = ops[row];
+      const hostWall = ctx.hosts.get(cur.wall);
+      if (!hostWall) return null;
+      const mx = Math.round((hostWall.width - cur.x) * 100) / 100;
+      const next = ops.map((o, i) => (i === row ? { ...o, x: mx } : o));
+      return { patch: { openings: writeOpenings(next) }, select: { openings: row } };
+    }
+
+    if (action === 'duplicateOpening' && row !== undefined && row >= 0 && row < ops.length && ctx) {
+      const cur = ops[row];
+      const hostWall = ctx.hosts.get(cur.wall);
+      if (!hostWall) return { message: { code: 'elev.wall-off' } };
+      const dup = duplicateOpeningOnWall(cur, hostWall, ops, ctx.t, ctx.mullionWidth);
+      if (!dup) return { message: { code: 'opening-no-space' } };
+      const next = [...ops, dup];
+      return {
+        patch: { openings: writeOpenings(next) },
+        select: { openings: next.length - 1 },
+        ...(surface
+          ? {
+              view: dup.wall.startsWith('wall-') ? 'inner' : dup.wall,
+              state: dup.wall.startsWith('wall-') ? { selId: dup.id, wallKey: dup.wall } : { selId: dup.id },
+            }
+          : {}),
+      };
     }
 
     return null;

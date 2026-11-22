@@ -70,7 +70,9 @@
             "removeTitle": "opening.remove",
             "rowActions": [
               { "id": "nextWall", "label": "row.nextWall", "title": "row.nextWall.title" },
-              { "id": "centerOpening", "label": "row.center", "title": "row.center.title" }
+              { "id": "centerOpening", "label": "row.center", "title": "row.center.title" },
+              { "id": "mirrorOpening", "label": "row.mirror", "title": "row.mirror.title" },
+              { "id": "duplicateOpening", "label": "row.duplicate", "title": "row.duplicate.title" }
             ]
           },
           {
@@ -90,7 +92,10 @@
         "actions": [
           { "id": "addDoor", "label": "action.addDoor", "title": "action.addDoor.title" },
           { "id": "addWindow", "label": "action.addWindow", "title": "action.addWindow.title" },
-          { "id": "presetClassic", "label": "action.presetClassic", "title": "action.presetClassic.title" }
+          { "id": "presetClassic", "label": "action.presetClassic", "title": "action.presetClassic.title" },
+          { "id": "presetModern", "label": "action.presetModern", "title": "action.presetModern.title" },
+          { "id": "presetCottage", "label": "action.presetCottage", "title": "action.presetCottage.title" },
+          { "id": "clearOpenings", "label": "action.clearOpenings", "title": "action.clearOpenings.title" }
         ],
         "surface": {
           "views": [
@@ -168,6 +173,9 @@
               "addDoor",
               "addWindow",
               "presetClassic",
+              "presetModern",
+              "presetCottage",
+              "clearOpenings",
               "openings"
             ]
           },
@@ -394,12 +402,22 @@
           "row.nextWall.title": "Move this opening to the next wall",
           "row.center": "Center",
           "row.center.title": "Center this opening horizontally on its wall",
+          "row.mirror": "Mirror",
+          "row.mirror.title": "Mirror this opening horizontally across the wall center",
+          "row.duplicate": "Duplicate",
+          "row.duplicate.title": "Duplicate this opening onto a free spot on the same wall",
           "action.addDoor": "Add door",
           "action.addDoor.title": "Add a door on the active wall",
           "action.addWindow": "Add window",
           "action.addWindow.title": "Add a window on the active wall",
           "action.presetClassic": "Classic facade",
-          "action.presetClassic.title": "Replace openings with a balanced front door and windows on all sides",
+          "action.presetClassic.title": "Replace openings with a balanced front door and cross windows on all sides",
+          "action.presetModern": "Modern facade",
+          "action.presetModern.title": "Replace openings with an offset entrance, wide panoramic windows and a double patio door",
+          "action.presetCottage": "Cottage facade",
+          "action.presetCottage.title": "Replace openings with an arched door, lattice & arched windows and gable round windows",
+          "action.clearOpenings": "Clear all",
+          "action.clearOpenings.title": "Remove all doors and windows",
           "op.row.front": "Front · #{id}",
           "op.row.back": "Back · #{id}",
           "op.row.left": "Left · #{id}",
@@ -609,12 +627,22 @@
           "row.nextWall.title": "Diese Öffnung auf die nächste Wand verschieben",
           "row.center": "Mittig",
           "row.center.title": "Diese Öffnung waagerecht auf der Wand zentrieren",
+          "row.mirror": "Spiegeln",
+          "row.mirror.title": "Diese Öffnung waagerecht an der Wandmitte spiegeln",
+          "row.duplicate": "Duplizieren",
+          "row.duplicate.title": "Diese Öffnung auf einem freien Platz derselben Wand duplizieren",
           "action.addDoor": "Tür hinzufügen",
           "action.addDoor.title": "Eine Tür auf der aktiven Wand hinzufügen",
           "action.addWindow": "Fenster hinzufügen",
           "action.addWindow.title": "Ein Fenster auf der aktiven Wand hinzufügen",
           "action.presetClassic": "Klassische Fassade",
-          "action.presetClassic.title": "Öffnungen durch eine klassische Haustür und Fenster auf allen Seiten ersetzen",
+          "action.presetClassic.title": "Öffnungen durch eine klassische Haustür und Kreuzsprossenfenster auf allen Seiten ersetzen",
+          "action.presetModern": "Moderne Fassade",
+          "action.presetModern.title": "Öffnungen durch versetzten Eingang, große Panoramafenster und Doppeltür ersetzen",
+          "action.presetCottage": "Landhaus-Fassade",
+          "action.presetCottage.title": "Öffnungen durch Rundbogentür, Sprossen- & Bogenfenster sowie runde Giebelfenster ersetzen",
+          "action.clearOpenings": "Alle entfernen",
+          "action.clearOpenings.title": "Alle Türen und Fenster löschen",
           "op.row.front": "Vorne · #{id}",
           "op.row.back": "Hinten · #{id}",
           "op.row.left": "Links · #{id}",
