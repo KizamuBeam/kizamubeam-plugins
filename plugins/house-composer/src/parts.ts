@@ -5,15 +5,30 @@ import { host, polygon, type JointOptions, type Pose, type SubPath, type V3 } fr
 import { fields, joint, panel, tenonStretches, tenonsInto, widen, JointError, type Parts, type Pt } from './joints';
 import type { End, Model, OEdgeInfo, Side, WallInfo } from './model';
 import type { Pt as XY } from './outline';
-import { buildWallHosts, openingCutouts, openingMarks, sillBaseZ, type Opening, type WallHost } from './openings';
 import {
+  buildWallHosts,
+  openingCutouts,
+  openingMarks,
+  openingTrimFrame,
+  outerWallHost,
+  safeFrameWidth,
+  sillBaseZ,
+  type Opening,
+  type WallHost,
+} from './openings';
+import {
+  buildChimneyGeom,
   buildRoofPanels,
+  buildRoofRails,
   buildRoofTrusses,
   computeRoofMetrics,
   roofPatternMarks,
   wallProfile,
+  type ChimneySpec,
   type OuterWallKey,
+  type RoofExclusion,
   type RoofPanelGeom,
+  type RoofRailSpec,
   type RoofSpec,
   type TrussSpec,
 } from './roof';
@@ -28,10 +43,15 @@ export interface HouseDims {
   clearance: number;
   kerf: number;
   floor: boolean;
+  midFloor?: boolean;
+  midFloorHeight?: number;
+  midFloorStair?: boolean;
   sides: Record<Side, boolean>;
   drop: number;
   roof: RoofSpec;
+  chimney?: ChimneySpec;
   engraveFrames: boolean;
+  cutoutFrames?: boolean;
   frameWidth: number;
   mullionWidth: number;
 }
@@ -72,6 +92,9 @@ export interface BuiltHouse {
   boards: Board[];
   roofPanels: RoofPanelGeom[];
   trusses: TrussSpec[];
+  rails: RoofRailSpec[];
+  /** Extra 3D poses for optional architectural parts (mid-floor, chimney walls & cap, 3D trim frames) */
+  extraPoses: Record<string, Pose>;
   /** Uncentered panel height (maxZ - floorZ or maxZ) for each outer wall, used by 3D poses */
   outerHeights: Partial<Record<OuterWallKey, { topZ: number; botZ: number }>>;
   hosts: Map<string, WallHost>;
@@ -84,12 +107,13 @@ export const outerKey = (k: number) => `outer-${k + 1}`;
 const EPS = 1e-6;
 export const anyOuter = (d: HouseDims) => d.sides.x0 || d.sides.x1 || d.sides.y0 || d.sides.y1;
 
-/** Clear height of interior walls */
+/** Clear height of interior walls (capped under midFloorHeight when an intermediate floor is enabled) */
 export function innerHeight(d: HouseDims): number {
   const m = computeRoofMetrics(d.W, d.D, d.H, d.t, d.roof);
   const floorZ = d.floor ? d.t : 0;
   const lidT = m.flushFlat && anyOuter(d) ? d.t : 0;
-  return anyOuter(d) ? d.H - floorZ - lidT - d.drop : d.H - floorZ;
+  const topCap = d.midFloor && d.midFloorHeight !== undefined ? Math.min(d.H - lidT, d.midFloorHeight) : d.H - lidT;
+  return anyOuter(d) ? topCap - floorZ - d.drop : topCap - floorZ;
 }
 
 /** Height of shaped-outline outer boards (flat roof only) */
@@ -361,7 +385,49 @@ export function houseWallHosts(m: Model, d: HouseDims): Map<string, WallHost> {
       joints,
     };
   });
-  return buildWallHosts(d.W, d.D, d.H, d.t, d.floor, d.sides, d.roof, innerList);
+  const hosts = buildWallHosts(d.W, d.D, d.H, d.t, d.floor, d.sides, d.roof, innerList);
+  if (!m.outline) return hosts;
+
+  // Shaped L/U/C outline: replace outer wall hosts with the actual built stretches (spans) along each bounding side
+  const { W, D, H, t } = d;
+  const floorZ = d.floor ? t : 0;
+  const sillZ = sillBaseZ(d.floor, t);
+  const wInner = W - 2 * t;
+  const dInner = D - 2 * t;
+  const sideDef: Record<OuterWallKey, { axis: 'h' | 'v'; pos: number; len: number; flipX: boolean }> = {
+    front: { axis: 'h', pos: dInner + t / 2, len: W, flipX: false },
+    back: { axis: 'h', pos: -t / 2, len: W, flipX: true },
+    left: { axis: 'v', pos: -t / 2, len: D, flipX: false },
+    right: { axis: 'v', pos: wInner + t / 2, len: D, flipX: true },
+  };
+  const hasTopJoint = d.roof.mount === 'fixed' && d.roof.type === 'flat';
+  const builtEdges = m.outline.edges.filter((e) => !e.open);
+
+  for (const [wk, def] of Object.entries(sideDef) as [OuterWallKey, (typeof sideDef)[OuterWallKey]][]) {
+    const matching = builtEdges.filter((e) => e.axis === def.axis && Math.abs(e.pos - def.pos) < 0.05);
+    if (!matching.length) {
+      hosts.delete(wk);
+      continue;
+    }
+    const spans: [number, number][] = [];
+    const jointXs: number[] = [];
+    for (const e of matching) {
+      // Unflipped outer extent including t/2 wall thickness at both perpendicular ends
+      const u0 = e.from + t / 2;
+      const u1 = e.to + 1.5 * t;
+      const s0 = def.flipX ? def.len - u1 : u0;
+      const s1 = def.flipX ? def.len - u0 : u1;
+      spans.push([Math.min(s0, s1), Math.max(s0, s1)]);
+      for (const tee of e.tees) {
+        const u = tee.at + t;
+        jointXs.push(def.flipX ? def.len - u : u);
+      }
+    }
+    spans.sort((a, b) => a[0] - b[0]);
+    const prof = wallProfile(wk, W, D, H, t, d.roof);
+    hosts.set(wk, outerWallHost(prof, floorZ, sillZ, t, true, true, hasTopJoint ? t : 0, jointXs, spans));
+  }
+  return hosts;
 }
 
 /**
@@ -392,20 +458,21 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     parts.floor = [polygon([[fx0, fy0], [fx1, fy0], [fx1, fy1], [fx0, fy1]])];
   }
 
-  // 2. Roof panels (centered in their own 2D planes, outer face UP)
+  // 2. Roof panels (centered in their own 2D planes, outer face UP; marks generated after tenon slots in step 7b)
   const roofPanels = buildRoofPanels(W, D, H, t, roof);
   for (const rp of roofPanels) {
     parts[rp.key] = [polygon(rp.pts)];
-    if (rp.marks.length) marks[rp.key] = [...rp.marks];
   }
 
   // If flush flat roof, rebuild roof outline as inner rectangle (like floor) for perimeter finger joints
+  let flushRoofPts: [number, number][] | null = null;
   if (rm.flushFlat && anyOuter(d)) {
     const rx0 = sides.x0 ? -W / 2 + t : -W / 2;
     const rx1 = sides.x1 ? W / 2 - t : W / 2;
     const ry0 = sides.y0 ? -D / 2 + t : -D / 2;
     const ry1 = sides.y1 ? D / 2 - t : D / 2;
-    parts.roof = [polygon([[rx0, ry0], [rx1, ry0], [rx1, ry1], [rx0, ry1]])];
+    flushRoofPts = [[rx0, ry0], [rx1, ry0], [rx1, ry1], [rx0, ry1]];
+    parts.roof = [polygon(flushRoofPts)];
   }
 
   // 3. Prepare the 4 outer walls with exact profiles and top tenon split points
@@ -471,7 +538,6 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     const xR = adjR ? L - t : L;
 
     // Corner top Z at x=0 and x=L (for shed-slope, corner meets the adjacent flat wall at its topZ!)
-    const opp: Record<OuterWallKey, OuterWallKey> = { front: 'back', back: 'front', left: 'right', right: 'left' };
     const adjWallZ = (side: Side) => {
       const k = OUTER[side];
       const p = wallProfile(k, W, D, H, t, roof);
@@ -481,8 +547,8 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     const cornerZR = adjR ? Math.min(zAtPanel(xR), adjWallZ(panelAdj[key].right)) : zAtPanel(L);
 
     const yOfZ = (z: number) => topZ - z;
-    const yCornerL = yOfZ(cornerZL);
-    const yCornerR = yOfZ(cornerZR);
+    let yCornerL = yOfZ(cornerZL);
+    let yCornerR = yOfZ(cornerZR);
     const yBot = yOfZ(botZ);
 
     const slopeJoints: WallSetup['slopeJoints'] = [];
@@ -493,6 +559,14 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
       flatRoofSpans = roofTenonSpans(xL, xR, t, finger);
     }
 
+    // Steep gable peak (> 55°): tiny horizontal ridge plateau avoids < 56.3° acute peak tip (check-web-cut)
+    const gableHalfFlat =
+      roof.type === 'gable' && prof.kind === 'gable' && rm.pitchDeg > 55
+        ? Math.min(Math.max(0.6, t * 0.4), Math.min(1.0, t * 0.55))
+        : 0;
+    const gableYPeak = gableHalfFlat * Math.tan(rm.pitchRad);
+    const gableUPeak = gableHalfFlat / Math.cos(rm.pitchRad);
+
     // Gable roof sloped tenons on gable walls (fixed mount)
     if (roof.type === 'gable' && roof.mount === 'fixed' && prof.kind === 'gable') {
       const ca = Math.cos(rm.pitchRad);
@@ -500,9 +574,10 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
       const Ls = L / 2 / ca;
       const sRidge = Math.max(t, t * tanA) + t;
       const sEaves = Math.max(t, t / ca) + t;
-      const spans = roofTenonSpans(sRidge, Ls - sEaves, t, finger);
+      const spans = roofTenonSpans(sRidge - gableUPeak, Ls - sEaves - gableUPeak, t, finger);
       const flush: -1 | 0 | 1 = roof.gableOverhang < EPS ? 1 : 0; // sign determined per roof panel below
-      const peak: Pt = { x: L / 2, y: 0 };
+      const pPeakL: Pt = { x: L / 2 - gableHalfFlat, y: gableYPeak };
+      const pPeakR: Pt = { x: L / 2 + gableHalfFlat, y: gableYPeak };
       const pL: Pt = { x: 0, y: yOfZ(H) };
       const pR: Pt = { x: L, y: yOfZ(H) };
 
@@ -516,24 +591,22 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
         const xB = key === 'left' ? W / 2 - t / 2 : -W / 2 + t / 2; // roof-back has u = -X
         const fSideF: -1 | 0 | 1 = flush ? (key === 'left' ? -1 : 1) : 0;
         const fSideB: -1 | 0 | 1 = flush ? (key === 'left' ? 1 : -1) : 0;
-        // Back slope: from peak toward pL (u = 0 at peak, u = Ls at pL)
         if (spans.length) {
           slopeJoints.push({
-            a: peak,
+            a: pPeakL,
             b: pL,
             roofKey: 'roof-back',
             xRoof: xB,
-            yRoofAt: (u) => -rpB.height / 2 + u,
+            yRoofAt: (s) => -rpB.height / 2 + gableUPeak + s,
             flushSide: fSideB,
             spans,
           });
-          // Front slope: from peak toward pR (u = 0 at peak, u = Ls at pR)
           slopeJoints.push({
-            a: peak,
+            a: pPeakR,
             b: pR,
             roofKey: 'roof-front',
             xRoof: xF,
-            yRoofAt: (u) => -rpF.height / 2 + u,
+            yRoofAt: (s) => -rpF.height / 2 + gableUPeak + s,
             flushSide: fSideF,
             spans,
           });
@@ -544,28 +617,26 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
         // Segment peak→pL is LEFT slope (roof-left), segment peak→pR is RIGHT slope (roof-right).
         const rpL = rpByKey.get('roof-left')!;
         const rpR = rpByKey.get('roof-right')!;
-        // roof-left has u = -Y (back at -D/2, front at +D/2)
         const xL_r = key === 'front' ? D / 2 - t / 2 : -D / 2 + t / 2;
-        // roof-right has u = +Y (front at -D/2, back at +D/2)
         const xR_r = key === 'front' ? -D / 2 + t / 2 : D / 2 - t / 2;
         const fSideL: -1 | 0 | 1 = flush ? (key === 'front' ? 1 : -1) : 0;
         const fSideR: -1 | 0 | 1 = flush ? (key === 'front' ? -1 : 1) : 0;
         if (spans.length) {
           slopeJoints.push({
-            a: peak,
+            a: pPeakL,
             b: pL,
             roofKey: 'roof-left',
             xRoof: xL_r,
-            yRoofAt: (u) => -rpL.height / 2 + u,
+            yRoofAt: (s) => -rpL.height / 2 + gableUPeak + s,
             flushSide: fSideL,
             spans,
           });
           slopeJoints.push({
-            a: peak,
+            a: pPeakR,
             b: pR,
             roofKey: 'roof-right',
             xRoof: xR_r,
-            yRoofAt: (u) => -rpR.height / 2 + u,
+            yRoofAt: (s) => -rpR.height / 2 + gableUPeak + s,
             flushSide: fSideR,
             spans,
           });
@@ -574,7 +645,7 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     }
 
     // Shed roof sloped tenons on the two trapezoidal side walls (fixed mount)
-    let shedHighClip: { x: number; y: number; uClip: number } | null = null;
+    let shedHighClip: { x: number; y: number; uClip: number; highAtLeft: boolean } | null = null;
     if (roof.type === 'shed' && prof.kind === 'shed-slope') {
       const ca = Math.cos(rm.pitchRad);
       const tanA = Math.tan(rm.pitchRad);
@@ -585,7 +656,13 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
       const clipX = Math.min(t * 0.5, 1.5);
       const clipY = clipX * tanA;
       const uClip = clipX / ca;
-      shedHighClip = { x: highAtLeft ? clipX : L - clipX, y: clipY, uClip };
+      shedHighClip = { x: highAtLeft ? clipX : L - clipX, y: clipY, uClip, highAtLeft };
+
+      // When the high adjacent wall is turned OFF, there is no vertical corner joint on that side;
+      // keep the base rectangle at eaves height yOfZ(H) so capPoly cleanly forms the entire upper trapezoid
+      // with a 90° horizontal landing at shedHighClip.y and zero shared-vertex grazing in Clipper.
+      if (highAtLeft && !adjL) yCornerL = yOfZ(H);
+      if (!highAtLeft && !adjR) yCornerR = yOfZ(H);
 
       if (roof.mount === 'fixed') {
         const Ls = L / ca;
@@ -623,7 +700,6 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
           });
         }
       }
-      void opp;
     }
 
     // Build clockwise base outer wall polygon [xL..xR] × [yCorner..yBot] BEFORE vertical corner finger joints.
@@ -646,13 +722,20 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     const ov = Math.min(0.5, t * 0.25);
     if (prof.kind === 'gable') {
       const yE = yOfZ(H);
-      capPoly = polygon([[0, yE + ov], [0, yE], [L / 2, 0], [L, yE], [L, yE + ov]]);
+      capPoly =
+        gableHalfFlat > EPS
+          ? polygon([
+              [0, yE + ov],
+              [0, yE],
+              [L / 2 - gableHalfFlat, gableYPeak],
+              [L / 2 + gableHalfFlat, gableYPeak],
+              [L, yE],
+              [L, yE + ov],
+            ])
+          : polygon([[0, yE + ov], [0, yE], [L / 2, 0], [L, yE], [L, yE + ov]]);
     } else if (prof.kind === 'shed-slope' && shedHighClip) {
-      const z0 = zAtPanel(0),
-        zL = zAtPanel(L);
-      const highAtLeft = z0 > zL;
       const capNodes: Pt[] = [];
-      if (highAtLeft) {
+      if (shedHighClip.highAtLeft) {
         pushNode(capNodes, 0, yCornerL + ov);
         pushNode(capNodes, 0, shedHighClip.y);
         pushNode(capNodes, shedHighClip.x, shedHighClip.y);
@@ -755,6 +838,19 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
   }
 
   // 6. Roof tenons (overhanging flat roof, fixed gable roof, fixed shed roof)
+  const roofExclusions: Record<string, RoofExclusion[]> = {};
+  const addRoofExcl = (roofKey: string, a: Pt, b: Pt, width: number, pad = 1.5) => {
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    const horiz = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
+    const hw = (width + Math.max(0, d.clearance)) / 2 + pad;
+    const ht = (t + Math.max(0, d.clearance)) / 2 + pad;
+    const box: RoofExclusion = horiz
+      ? [mx - hw, my - ht, mx + hw, my + ht]
+      : [mx - ht, my - hw, mx + ht, my + hw];
+    (roofExclusions[roofKey] ??= []).push(box);
+  };
+
   for (const s of setups.values()) {
     // Overhanging fixed flat roof tenons
     if (s.flatRoofSpans.length && parts.roof) {
@@ -765,14 +861,17 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
           if (s.key === 'left') return { x: -W / 2 + t / 2, y: u - D / 2 };
           return { x: W / 2 - t / 2, y: u - D / 2 };
         };
+        const ra = map(sp.a),
+          rb = map(sp.b);
         parts = tenonsInto(
           parts,
           opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
           { part: s.key, a: { x: sp.a, y: 0 }, b: { x: sp.b, y: 0 } },
           'roof',
-          map(sp.a),
-          map(sp.b),
+          ra,
+          rb,
         );
+        addRoofExcl('roof', ra, rb, sp.width);
       }
     }
 
@@ -784,111 +883,343 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
       for (const sp of sj.spans) {
         const pa = alongSeg(spliced.a, spliced.b, sp.a);
         const pb = alongSeg(spliced.a, spliced.b, sp.b);
+        const ra = { x: sj.xRoof, y: sj.yRoofAt(sp.a) };
+        const rb = { x: sj.xRoof, y: sj.yRoofAt(sp.b) };
         parts = roofTenonInto(
           parts,
           opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
           { part: s.key, a: pa, b: pb },
           sj.roofKey,
-          { x: sj.xRoof, y: sj.yRoofAt(sp.a) },
-          { x: sj.xRoof, y: sj.yRoofAt(sp.b) },
+          ra,
+          rb,
           sj.flushSide,
         );
+        addRoofExcl(sj.roofKey, ra, rb, sp.width);
       }
     }
   }
 
-  // 7. Removable gable attic trusses (with tenons into the two roof panels so the roof lifts off as one rigid piece)
-  const trusses = buildRoofTrusses(W, D, H, t, roof);
-  for (const tr of trusses) {
-    const half = tr.innerSpan / 2;
-    const h = tr.rise;
+  // 7. Attic trusses (removable gable, open-gable support, and crossed hip/pyramid roof skeletons)
+  const trusses = buildRoofTrusses(W, D, H, t, roof, sides);
+  const lapHalfW = Math.max(0.5, (t + d.clearance) / 2);
+  const lapShoulder = Math.min(1.5, t * 0.5);
+
+  // Precompute each truss's top plateau so intersecting spine & cross trusses share an identical half-lap Z plane
+  const trussMeta = trusses.map((tr) => {
     const ca = Math.cos(tr.pitchRad);
     const tanA = Math.tan(tr.pitchRad);
-    const LsInner = half / ca;
+    const pitchDeg = (tr.pitchRad * 180) / Math.PI;
+    const topLaps = tr.laps.filter((lp) => lp.fromTop);
+    let halfTop = tr.topFlat / 2;
+    if (topLaps.length) {
+      const maxNeed = Math.max(...topLaps.map((lp) => Math.abs(lp.offsetFromCenter))) + lapHalfW + lapShoulder;
+      halfTop = Math.max(halfTop, maxNeed);
+    } else if (halfTop < EPS && pitchDeg > 55) {
+      halfTop = Math.min(Math.max(0.6, t * 0.4), Math.min(1.0, t * 0.55));
+    }
+    const extraFlat = Math.max(0, halfTop - tr.topFlat / 2);
+    const yPeak = extraFlat * tanA;
+    const uPeak = extraFlat / ca;
+    return { tr, ca, tanA, halfTop, yPeak, uPeak };
+  });
+
+  const maxYPeak = trussMeta.reduce((acc, tm) => Math.max(acc, tm.yPeak), 0);
+  const sharedLapY = trussMeta.length ? maxYPeak + (trussMeta[0].tr.rise - maxYPeak) * 0.5 : 0;
+
+  // Map outer wall keys to interior-wall T-joint positions (unmirrored panel X) so fixed truss hooks never collide
+  const outerInnerJoints: Record<OuterWallKey, number[]> = { front: [], back: [], left: [], right: [] };
+  for (const wi of m.walls) {
+    for (const end of [wi.start, wi.end]) {
+      if (end.kind === 'outer') outerInnerJoints[OUTER[end.side]].push(wi.wall.pos + t);
+    }
+  }
+
+  for (const { tr, ca, tanA, halfTop, yPeak, uPeak } of trussMeta) {
+    const cx = tr.outerSpan / 2;
+    const h = tr.rise;
+    const LsInner = (tr.innerSpan - tr.topFlat) / 2 / ca;
     const sRidge = Math.max(t, t * tanA) + t;
     const sHeel = Math.max(t, t / ca) + t * 0.5;
-    const spans = roofTenonSpans(sRidge, LsInner - sHeel, t, finger);
 
-    // Uncentered truss coords: x ∈ [0..innerSpan] (peak at x=half, y=0; base at y=h)
-    const peak: Pt = { x: half, y: 0 };
-    const pL: Pt = { x: 0, y: h - tr.heel };
-    const pR: Pt = { x: tr.innerSpan, y: h - tr.heel };
+    const rpL = rpByKey.get(tr.leftRoofKey)!;
+    const rpR = rpByKey.get(tr.rightRoofKey)!;
+    const triWebMin = (rp: RoofPanelGeom) => {
+      if (rp.pts.length !== 3) return 0;
+      const ratio = rp.width / (2 * Math.max(EPS, rp.height));
+      return (t / 2 + Math.max(t, 2) + 0.5) / Math.max(0.15, ratio);
+    };
+    const sStartL = Math.max(sRidge, uPeak + t, triWebMin(rpL));
+    const sStartR = Math.max(sRidge, uPeak + t, triWebMin(rpR));
+    const spansL = roofTenonSpans(sStartL - uPeak, LsInner - sHeel - uPeak, t, finger);
+    const spansR = roofTenonSpans(sStartR - uPeak, LsInner - sHeel - uPeak, t, finger);
+
+    // Optional fixed outer-wall saddle hooks for hip & pyramid roofs
+    const leftWall: OuterWallKey = tr.spanAxis === 'y' ? 'back' : 'left';
+    const rightWall: OuterWallKey = tr.spanAxis === 'y' ? 'front' : 'right';
+    const wallPanelX = tr.spanAxis === 'y' ? tr.at : D - tr.at;
+    const canHook = (wk: OuterWallKey) => {
+      if (!tr.fixedHooks) return false;
+      const s = setups.get(wk);
+      if (!s || !parts[wk]) return false;
+      if (wallPanelX < 2 * t + 1 || wallPanelX > s.L - 2 * t - 1) return false;
+      return !outerInnerJoints[wk].some((jx) => Math.abs(jx - wallPanelX) < t + 2);
+    };
+    const hookL = canHook(leftWall);
+    const hookR = canHook(rightWall);
+
+    // Uncentered truss coords: x ∈ [0..outerSpan] centered at cx = outerSpan/2, y ∈ [0..h] (+t on fixed saddle hooks)
+    const pPeakL: Pt = { x: cx - halfTop, y: yPeak };
+    const pPeakR: Pt = { x: cx + halfTop, y: yPeak };
+    const pL: Pt = hookL ? { x: 0, y: h } : { x: t, y: h - tr.heel };
+    const pR: Pt = hookR ? { x: tr.outerSpan, y: h } : { x: tr.outerSpan - t, y: h - tr.heel };
+    const LsLeft = Math.hypot(pPeakL.x - pL.x, pPeakL.y - pL.y);
+
     const nodes: Pt[] = [];
+    // Left slope up from pL to pPeakL
     pushNode(nodes, pL.x, pL.y);
-    if (spans.length) {
-      const pts = [...new Set(spans.flatMap((sp) => [LsInner - sp.b, LsInner - sp.a]))].sort((a, b) => a - b);
+    if (spansL.length) {
+      const pts = [...new Set(spansL.flatMap((sp) => [LsLeft - sp.b, LsLeft - sp.a]))].sort((a, b) => a - b);
       for (const s of pts) {
-        const q = alongSeg(pL, peak, s);
+        const q = alongSeg(pL, pPeakL, s);
         pushNode(nodes, q.x, q.y);
       }
     }
-    pushNode(nodes, peak.x, peak.y);
-    if (spans.length) {
-      const pts = [...new Set(spans.flatMap((sp) => [sp.a, sp.b]))].sort((a, b) => a - b);
+    pushNode(nodes, pPeakL.x, pPeakL.y);
+
+    // Top horizontal ridge edge (with optional top half-lap slots into cross trusses)
+    const topLaps = tr.laps
+      .filter((lp) => lp.fromTop)
+      .map((lp) => cx + lp.offsetFromCenter)
+      .sort((a, b) => a - b);
+    for (const lx of topLaps) {
+      pushNode(nodes, lx - lapHalfW, yPeak);
+      pushNode(nodes, lx - lapHalfW, sharedLapY);
+      pushNode(nodes, lx + lapHalfW, sharedLapY);
+      pushNode(nodes, lx + lapHalfW, yPeak);
+    }
+    if (halfTop > EPS) pushNode(nodes, pPeakR.x, pPeakR.y);
+
+    // Right slope down from pPeakR to pR
+    if (spansR.length) {
+      const pts = [...new Set(spansR.flatMap((sp) => [sp.a, sp.b]))].sort((a, b) => a - b);
       for (const s of pts) {
-        const q = alongSeg(peak, pR, s);
+        const q = alongSeg(pPeakR, pR, s);
         pushNode(nodes, q.x, q.y);
       }
     }
     pushNode(nodes, pR.x, pR.y);
-    pushNode(nodes, tr.innerSpan, h);
-    pushNode(nodes, 0, h);
+
+    // Right end: either downward saddle hook into rightWall or vertical inner face to y=h
+    if (hookR) {
+      pushNode(nodes, tr.outerSpan, h + t);
+      pushNode(nodes, tr.outerSpan - t, h + t);
+    }
+    pushNode(nodes, tr.outerSpan - t, h);
+
+    // Bottom horizontal edge right-to-left (with optional bottom half-lap slots into spine truss)
+    const botLaps = tr.laps
+      .filter((lp) => !lp.fromTop)
+      .map((lp) => cx + lp.offsetFromCenter)
+      .sort((a, b) => b - a);
+    for (const lx of botLaps) {
+      pushNode(nodes, lx + lapHalfW, h);
+      pushNode(nodes, lx + lapHalfW, sharedLapY);
+      pushNode(nodes, lx - lapHalfW, sharedLapY);
+      pushNode(nodes, lx - lapHalfW, h);
+    }
+    pushNode(nodes, t, h);
+
+    // Left end: optional downward saddle hook into leftWall
+    if (hookL) {
+      pushNode(nodes, t, h + t);
+      pushNode(nodes, 0, h + t);
+    }
+
     parts[tr.key] = [{ closed: true, nodes }];
 
-    if (spans.length) {
-      if (roof.ridgeAxis === 'x') {
-        const rpF = rpByKey.get('roof-front')!;
-        const rpB = rpByKey.get('roof-back')!;
-        // tr.at is 3D X center; roof-front has u=+X (x = tr.at - W/2), roof-back has u=-X (x = W/2 - tr.at)
-        const xF = tr.at - W / 2;
-        const xB = W / 2 - tr.at;
-        for (const sp of spans) {
-          parts = tenonsInto(
-            parts,
-            opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
-            { part: tr.key, a: alongSeg(peak, pL, sp.a), b: alongSeg(peak, pL, sp.b) },
-            'roof-back',
-            { x: xB, y: -rpB.height / 2 + sp.a },
-            { x: xB, y: -rpB.height / 2 + sp.b },
-          );
-          parts = tenonsInto(
-            parts,
-            opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
-            { part: tr.key, a: alongSeg(peak, pR, sp.a), b: alongSeg(peak, pR, sp.b) },
-            'roof-front',
-            { x: xF, y: -rpF.height / 2 + sp.a },
-            { x: xF, y: -rpF.height / 2 + sp.b },
-          );
-        }
-      } else {
-        const rpL = rpByKey.get('roof-left')!;
-        const rpR = rpByKey.get('roof-right')!;
-        // tr.at is 3D Y center; roof-left has u=-Y (x = D/2 - tr.at), roof-right has u=+Y (x = tr.at - D/2)
-        const xL_r = D / 2 - tr.at;
-        const xR_r = tr.at - D / 2;
-        for (const sp of spans) {
-          parts = tenonsInto(
-            parts,
-            opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
-            { part: tr.key, a: alongSeg(peak, pL, sp.a), b: alongSeg(peak, pL, sp.b) },
-            'roof-left',
-            { x: xL_r, y: -rpL.height / 2 + sp.a },
-            { x: xL_r, y: -rpL.height / 2 + sp.b },
-          );
-          parts = tenonsInto(
-            parts,
-            opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
-            { part: tr.key, a: alongSeg(peak, pR, sp.a), b: alongSeg(peak, pR, sp.b) },
-            'roof-right',
-            { x: xR_r, y: -rpR.height / 2 + sp.a },
-            { x: xR_r, y: -rpR.height / 2 + sp.b },
-          );
+    // Cut matching top saddle notches into fixed outer walls where hooks engage
+    const cutWallNotch = (wk: OuterWallKey) => {
+      const nw = (t + Math.max(0, d.clearance)) / 2;
+      const nd = t + Math.max(0, d.clearance) / 2;
+      const notch = polygon([[wallPanelX - nw, -1], [wallPanelX + nw, -1], [wallPanelX + nw, nd], [wallPanelX - nw, nd]]);
+      parts[wk] = host.boolean({ op: 'difference', a: parts[wk], b: [notch] });
+    };
+    if (hookL) cutWallNotch(leftWall);
+    if (hookR) cutWallNotch(rightWall);
+
+    // Tenon left & right slopes into their matching roof panels
+    for (const sp of spansL) {
+      const rlA = { x: tr.leftRoofX, y: -rpL.height / 2 + uPeak + sp.a };
+      const rlB = { x: tr.leftRoofX, y: -rpL.height / 2 + uPeak + sp.b };
+      parts = tenonsInto(
+        parts,
+        opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
+        { part: tr.key, a: alongSeg(pPeakL, pL, sp.a), b: alongSeg(pPeakL, pL, sp.b) },
+        tr.leftRoofKey,
+        rlA,
+        rlB,
+      );
+      addRoofExcl(tr.leftRoofKey, rlA, rlB, sp.width);
+    }
+    for (const sp of spansR) {
+      const rrA = { x: tr.rightRoofX, y: -rpR.height / 2 + uPeak + sp.a };
+      const rrB = { x: tr.rightRoofX, y: -rpR.height / 2 + uPeak + sp.b };
+      parts = tenonsInto(
+        parts,
+        opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
+        { part: tr.key, a: alongSeg(pPeakR, pR, sp.a), b: alongSeg(pPeakR, pR, sp.b) },
+        tr.rightRoofKey,
+        rrA,
+        rrB,
+      );
+      addRoofExcl(tr.rightRoofKey, rrA, rrB, sp.width);
+    }
+
+    // Center the truss around (outerSpan/2, h/2) to match tr.pose
+    parts[tr.key] = shiftSubs(parts[tr.key], -cx, -h / 2);
+  }
+
+  // 7a. Underside positioning rails / stop cleats for removable flat and shed roofs
+  const rawRails = buildRoofRails(W, D, H, t, d.floor, sides, roof);
+  const builtRails: RoofRailSpec[] = [];
+  const innerTopZ = floorZ + innerHeight(d);
+  for (const rl of rawRails) {
+    // Partition [-rl.length/2, +rl.length/2] around any perpendicular interior walls that reach into the rail's Z band
+    const blockers: [number, number][] = [];
+    if (innerTopZ > H - rl.height - 0.5) {
+      const padW = t / 2 + 0.4;
+      for (const wi of m.walls) {
+        if (rl.spanAxis === 'x' && wi.wall.axis === 'v') {
+          const yInner = D - t - rl.perpPos3D;
+          if (yInner >= wi.wall.from - t - 0.5 && yInner <= wi.wall.to + t + 0.5) {
+            const wx = wi.wall.pos + t;
+            const u = (wx - rl.pose.o[0]) * rl.pose.u[0];
+            blockers.push([u - padW, u + padW]);
+          }
+        } else if (rl.spanAxis === 'y' && wi.wall.axis === 'h') {
+          const xInner = rl.perpPos3D - t;
+          if (xInner >= wi.wall.from - t - 0.5 && xInner <= wi.wall.to + t + 0.5) {
+            const wy = D - t - wi.wall.pos;
+            const u = (wy - rl.pose.o[1]) * rl.pose.u[1];
+            blockers.push([u - padW, u + padW]);
+          }
         }
       }
     }
+    let freeSegs: [number, number][] = [[-rl.length / 2, rl.length / 2]];
+    for (const [b0, b1] of blockers) {
+      const next: [number, number][] = [];
+      for (const [a, b] of freeSegs) {
+        if (b1 <= a || b0 >= b) next.push([a, b]);
+        else {
+          if (b0 > a + EPS) next.push([a, b0]);
+          if (b1 < b - EPS) next.push([b1, b]);
+        }
+      }
+      freeSegs = next;
+    }
+    freeSegs.sort((a, b) => b[1] - b[0] - (a[1] - a[0]));
+    const best = freeSegs[0];
+    if (!best || best[1] - best[0] < Math.max(3 * t, 12)) continue;
 
-    // Center the truss around (half, h/2)
-    parts[tr.key] = shiftSubs(parts[tr.key], -half, -h / 2);
+    const [u0, u1] = best;
+    const len = u1 - u0;
+    const uShift = (u0 + u1) / 2;
+    const spans = roofTenonSpans(t * 0.5, len - t * 0.5, t, finger);
+    if (!spans.length || !parts[rl.roofKey]) continue;
+
+    parts[rl.key] = [panel(len, rl.height, { top: spans.flatMap((sp) => [sp.a, sp.b]), bottom: [], left: [], right: [] })];
+    for (const sp of spans) {
+      const ra = rl.roofAxis === 'x' ? { x: u0 + sp.a, y: rl.roofY } : { x: rl.roofY, y: u0 + sp.a };
+      const rb = rl.roofAxis === 'x' ? { x: u0 + sp.b, y: rl.roofY } : { x: rl.roofY, y: u0 + sp.b };
+      parts = tenonsInto(
+        parts,
+        opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
+        { part: rl.key, a: { x: sp.a, y: 0 }, b: { x: sp.b, y: 0 } },
+        rl.roofKey,
+        ra,
+        rb,
+      );
+      addRoofExcl(rl.roofKey, ra, rb, sp.width);
+    }
+    parts[rl.key] = shiftSubs(parts[rl.key], -len / 2, -rl.height / 2);
+    const pose: Pose = {
+      ...rl.pose,
+      o: [
+        rl.pose.o[0] + uShift * rl.pose.u[0],
+        rl.pose.o[1] + uShift * rl.pose.u[1],
+        rl.pose.o[2] + uShift * rl.pose.u[2],
+      ],
+    };
+    builtRails.push({ ...rl, length: len, pose });
+  }
+
+  const extraPoses: Record<string, Pose> = {};
+
+  // 7b. Optional chimney (tilted roof cutout + 4 finger-jointed shaft walls + overhanging flue cap)
+  if (d.chimney?.enabled) {
+    const cg = buildChimneyGeom(W, D, H, t, d.floor, roof, roofPanels, d.chimney, d.clearance);
+    if (cg && parts[cg.roofKey]) {
+      const [hx0, hy0, hx1, hy1] = cg.holeBox;
+      const hole = polygon([[hx0, hy0], [hx1, hy0], [hx1, hy1], [hx0, hy1]]);
+      parts[cg.roofKey] = host.boolean({ op: 'difference', a: parts[cg.roofKey], b: [hole] });
+      (roofExclusions[cg.roofKey] ??= []).push([hx0 - 1.5, hy0 - 1.5, hx1 + 1.5, hy1 + 1.5]);
+
+      const S = cg.size;
+      const chH = cg.zTop - cg.zBot;
+      const chMidZ = (cg.zBot + cg.zTop) / 2;
+      const chFinger = Math.min(finger, Math.max(3, Math.round((chH / 5) * 10) / 10));
+      const chWallKeys = ['chimney-front', 'chimney-back', 'chimney-left', 'chimney-right'] as const;
+      for (const ck of chWallKeys) {
+        parts[ck] = [polygon([[t, 0], [S - t, 0], [S - t, chH], [t, chH]])];
+      }
+      const chCorners: [string, number, string, number][] = [
+        ['chimney-front', t, 'chimney-left', S - t],
+        ['chimney-front', S - t, 'chimney-right', S - t],
+        ['chimney-back', t, 'chimney-left', t],
+        ['chimney-back', S - t, 'chimney-right', t],
+      ];
+      for (const [k1, x1, k2, x2] of chCorners) {
+        keep(
+          joint(parts, opts({ kind: 'finger', fingerWidth: chFinger, direction: 'out' }), [
+            { part: k1, a: { x: x1, y: 0 }, b: { x: x1, y: chH } },
+            { part: k2, a: { x: x2, y: 0 }, b: { x: x2, y: chH } },
+          ]),
+        );
+      }
+      for (const ck of chWallKeys) {
+        parts[ck] = shiftSubs(parts[ck], -S / 2, -chH / 2);
+      }
+      extraPoses['chimney-front'] = { o: [cg.cx, cg.cy - S / 2, chMidZ], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
+      extraPoses['chimney-back'] = { o: [cg.cx, cg.cy + S / 2 - t, chMidZ], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
+      extraPoses['chimney-left'] = { o: [cg.cx - S / 2, cg.cy, chMidZ], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] };
+      extraPoses['chimney-right'] = { o: [cg.cx + S / 2 - t, cg.cy, chMidZ], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] };
+
+      // Chimney cap with hollow flue opening
+      const capHalf = S / 2 + 2;
+      const capOuter = polygon([[-capHalf, -capHalf], [capHalf, -capHalf], [capHalf, capHalf], [-capHalf, capHalf]]);
+      const flueHalf = S / 2 - t;
+      parts['chimney-cap'] =
+        flueHalf >= 2
+          ? host.boolean({
+              op: 'difference',
+              a: [capOuter],
+              b: [polygon([[-flueHalf, -flueHalf], [flueHalf, -flueHalf], [flueHalf, flueHalf], [-flueHalf, flueHalf]])],
+            })
+          : [capOuter];
+      extraPoses['chimney-cap'] = { o: [cg.cx, cg.cy, cg.zTop], u: [1, 0, 0], v: [0, -1, 0], n: [0, 0, 1] };
+    }
+  }
+
+  // 7c. Roof engraving patterns (clipped to roof panel polygon AND skipping all tenon slots & chimney cutout)
+  if (roof.pattern !== 'none') {
+    const patMargin = roof.mount === 'fixed' ? Math.max(2, t + 1) : 2;
+    for (const rp of roofPanels) {
+      const pts = rm.flushFlat && rp.key === 'roof' && flushRoofPts ? flushRoofPts : rp.pts;
+      const margin = rm.flushFlat && rp.key === 'roof' && flushRoofPts ? 2 : patMargin;
+      const mks = roofPatternMarks(pts, roof.pattern, roof.patternSize, margin, roofExclusions[rp.key] ?? []);
+      if (mks.length) marks[rp.key] = mks;
+    }
   }
 
   // 8. Interior walls & their joints (crossings, corners, T-joints into inner & outer walls, floor teeth)
@@ -905,13 +1236,115 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     return { into: key, at: (y) => ({ x: u, y: s.yBot - p.h + y }) };
   });
 
-  // 9. Cut doors & windows and add engraved frame marks on outer walls & interior walls (BEFORE centering!)
+  // 8b. Optional intermediate floor slab (2nd story) tenoned cleanly into enabled outer walls
+  if (d.midFloor && d.midFloorHeight !== undefined) {
+    const midZ = d.midFloorHeight;
+    const fx0 = sides.x0 ? -W / 2 + t : -W / 2;
+    const fx1 = sides.x1 ? W / 2 - t : W / 2;
+    const fy0 = sides.y0 ? -D / 2 + t : -D / 2;
+    const fy1 = sides.y1 ? D / 2 - t : D / 2;
+    const mw = fx1 - fx0;
+    const md = fy1 - fy0;
+
+    // Partition an outer wall's inner span [xL..xR] around any interior-wall T-joints so tenons stay clear
+    const midEdgeSpans = (wk: OuterWallKey): { a: number; b: number; width: number }[] => {
+      const s = setups.get(wk);
+      if (!s) return [];
+      const padJoint = t / 2 + Math.max(2, t);
+      const blockers = outerInnerJoints[wk].map((jx): [number, number] => [jx - padJoint, jx + padJoint]);
+      let segs: [number, number][] = [[s.xL + t, s.xR - t]];
+      for (const [b0, b1] of blockers) {
+        const next: [number, number][] = [];
+        for (const [a, b] of segs) {
+          if (b1 <= a || b0 >= b) next.push([a, b]);
+          else {
+            if (b0 > a + EPS) next.push([a, b0]);
+            if (b1 < b - EPS) next.push([b1, b]);
+          }
+        }
+        segs = next;
+      }
+      const out: { a: number; b: number; width: number }[] = [];
+      for (const [a, b] of segs) out.push(...roofTenonSpans(a, b, t, finger));
+      return out;
+    };
+
+    const spBack = midEdgeSpans('back');
+    const spFront = midEdgeSpans('front');
+    const spLeft = midEdgeSpans('left');
+    const spRight = midEdgeSpans('right');
+
+    const slabPanel = panel(mw, md, {
+      top: spBack.flatMap((sp) => [sp.a - W / 2 - fx0, sp.b - W / 2 - fx0]),
+      bottom: spFront.flatMap((sp) => [sp.a - W / 2 - fx0, sp.b - W / 2 - fx0]),
+      left: spLeft.flatMap((sp) => [sp.a - D / 2 - fy0, sp.b - D / 2 - fy0]),
+      right: spRight.flatMap((sp) => [sp.a - D / 2 - fy0, sp.b - D / 2 - fy0]),
+    });
+    parts['mid-floor'] = shiftSubs([slabPanel], fx0, fy0);
+
+    const applyMidTenons = (wk: OuterWallKey, sps: { a: number; b: number; width: number }[]) => {
+      const s = setups.get(wk);
+      if (!s || !sps.length) return;
+      const ySlot = s.topZ - (midZ + t / 2);
+      for (const sp of sps) {
+        let aPt: Pt, bPt: Pt;
+        if (wk === 'back') {
+          aPt = { x: sp.a - W / 2, y: fy0 };
+          bPt = { x: sp.b - W / 2, y: fy0 };
+        } else if (wk === 'front') {
+          aPt = { x: sp.b - W / 2, y: fy1 };
+          bPt = { x: sp.a - W / 2, y: fy1 };
+        } else if (wk === 'left') {
+          aPt = { x: fx0, y: sp.b - D / 2 };
+          bPt = { x: fx0, y: sp.a - D / 2 };
+        } else {
+          aPt = { x: fx1, y: sp.a - D / 2 };
+          bPt = { x: fx1, y: sp.b - D / 2 };
+        }
+        parts = tenonsInto(
+          parts,
+          opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
+          { part: 'mid-floor', a: aPt, b: bPt },
+          wk,
+          { x: sp.a, y: ySlot },
+          { x: sp.b, y: ySlot },
+        );
+      }
+    };
+    applyMidTenons('back', spBack);
+    applyMidTenons('front', spFront);
+    applyMidTenons('left', spLeft);
+    applyMidTenons('right', spRight);
+
+    // Optional stairwell cutout in the back-right corner (keeping generous edge web)
+    if (d.midFloorStair && mw >= 28 && md >= 24) {
+      const sw = Math.min(26, mw * 0.3);
+      const sd = Math.min(22, md * 0.3);
+      const padS = Math.max(t + 3, 6);
+      const sx1 = fx1 - padS;
+      const sx0 = sx1 - sw;
+      const sy0 = fy0 + padS;
+      const sy1 = sy0 + sd;
+      if (sx0 > fx0 + padS && sy1 < fy1 - padS) {
+        parts['mid-floor'] = host.boolean({
+          op: 'difference',
+          a: parts['mid-floor'],
+          b: [polygon([[sx0, sy0], [sx1, sy0], [sx1, sy1], [sx0, sy1]])],
+        });
+      }
+    }
+
+    extraPoses['mid-floor'] = { o: [W / 2, D / 2, midZ], u: [1, 0, 0], v: [0, -1, 0], n: [0, 0, 1] };
+  }
+
+  // 9. Cut doors & windows, add engraved frame marks, and optionally build separate 3D trim frames (BEFORE centering!)
   const hosts = houseWallHosts(m, d);
   const sillZ = sillBaseZ(d.floor, t);
   const threshold = sillZ - floorZ;
   for (const s of setups.values()) {
     const wallOps = openings.filter((o) => o.wall === s.key);
     if (!wallOps.length) continue;
+    const hostWall = hosts.get(s.key);
     const flipX = s.key === 'back' || s.key === 'right';
     const cuts: SubPath[] = [];
     const wallMarks: SubPath[] = [];
@@ -920,7 +1353,18 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
       const yBot = s.topZ - (sillZ + op.y);
       const cutThrough = !d.floor && op.y <= 0.01;
       cuts.push(...openingCutouts(op, cx, yBot, d.mullionWidth, cutThrough));
-      if (d.engraveFrames) wallMarks.push(...openingMarks(op, cx, yBot, d.frameWidth));
+      const fw = hostWall ? safeFrameWidth(op, hostWall, wallOps, d.frameWidth, t) : d.frameWidth;
+      if (d.engraveFrames && fw > 0) wallMarks.push(...openingMarks(op, cx, yBot, fw));
+      if (d.cutoutFrames) {
+        const frameKey = `frame-${op.id}`;
+        const cutFw = Math.max(1.8, fw > 0 ? fw : d.frameWidth);
+        parts[frameKey] = openingTrimFrame(op, cutFw);
+        const opMidZ = sillZ + op.y + op.h / 2;
+        if (s.key === 'front') extraPoses[frameKey] = { o: [op.x, -t, opMidZ], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
+        else if (s.key === 'back') extraPoses[frameKey] = { o: [W - op.x, D, opMidZ], u: [-1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
+        else if (s.key === 'left') extraPoses[frameKey] = { o: [-t, D - op.x, opMidZ], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] };
+        else extraPoses[frameKey] = { o: [W, op.x, opMidZ], u: [0, 1, 0], v: [0, 0, -1], n: [1, 0, 0] };
+      }
     }
     if (cuts.length) parts[s.key] = host.boolean({ op: 'difference', a: parts[s.key], b: cuts });
     if (wallMarks.length) marks[s.key] = wallMarks;
@@ -929,13 +1373,17 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
   for (const p of walls) {
     const wallOps = openings.filter((o) => o.wall === p.key);
     if (!wallOps.length) continue;
+    const hostWall = hosts.get(p.key);
     const cuts: SubPath[] = [];
     const wallMarks: SubPath[] = [];
     for (const op of wallOps) {
       const yBot = p.h - (threshold + op.y);
       const cutThrough = !d.floor && op.y <= 0.01;
       cuts.push(...openingCutouts(op, op.x, yBot, d.mullionWidth, cutThrough));
-      if (d.engraveFrames) wallMarks.push(...openingMarks(op, op.x, yBot, d.frameWidth));
+      if (d.engraveFrames) {
+        const fw = hostWall ? safeFrameWidth(op, hostWall, wallOps, d.frameWidth, t) : d.frameWidth;
+        if (fw > 0) wallMarks.push(...openingMarks(op, op.x, yBot, fw));
+      }
     }
     if (cuts.length) parts[p.key] = host.boolean({ op: 'difference', a: parts[p.key], b: cuts });
     if (wallMarks.length) marks[p.key] = wallMarks;
@@ -944,8 +1392,6 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
   // 10. Center outer walls and inner walls around their bounding centers
   for (const s of setups.values()) {
     const cx = s.L / 2;
-    // Center Y so 3D pose o.z = (topZ + (floor ? 0 : 0)) / 2 — wait: keep wall panel center at (L/2, topZ/2)
-    // so bottom Z=0 is at y = +topZ/2 and top Z=topZ is at y = -topZ/2!
     const cy = s.topZ / 2;
     parts[s.key] = shiftSubs(parts[s.key], -cx, -cy);
     if (marks[s.key]) marks[s.key] = shiftSubs(marks[s.key], -cx, -cy);
@@ -957,7 +1403,7 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     if (marks[p.key]) marks[p.key] = shiftSubs(marks[p.key], -cx, -cy);
   }
 
-  return { parts, marks, info: dedupeInfo(info), walls, boards: [], roofPanels, trusses, outerHeights, hosts };
+  return { parts, marks, info: dedupeInfo(info), walls, boards: [], roofPanels, trusses, rails: builtRails, extraPoses, outerHeights, hosts };
 }
 
 /** Translate every node and Bezier handle in a list of SubPaths by (dx, dy) */
@@ -1116,6 +1562,7 @@ function shapedHouseParts(m: Model, d: HouseDims, openings: Opening[]): BuiltHou
     const outerRoof = makePlate(true);
     parts.roof = roof.overhang > EPS ? host.offset({ subs: [outerRoof], delta: roof.overhang, join: 'miter' }) : [outerRoof];
   }
+  const cleanRoofPts: [number, number][] = parts.roof?.[0]?.nodes.map((nd): [number, number] => [nd.x, nd.y]) ?? [];
 
   // Track flat roof tenon spans per outer edge
   const edgeRoofSpans = new Map<number, { a: number; b: number; width: number }[]>();
@@ -1168,6 +1615,7 @@ function shapedHouseParts(m: Model, d: HouseDims, openings: Opening[]): BuiltHou
     info.push(...r.info);
   };
 
+  const shapedRoofExcl: RoofExclusion[] = [];
   for (const e of ol.edges) {
     if (e.open) continue;
     const b = boardOf.get(e.k)!;
@@ -1183,14 +1631,21 @@ function shapedHouseParts(m: Model, d: HouseDims, openings: Opening[]): BuiltHou
     if (sps && parts.roof) {
       const Pc = (v: number) => (e.axis === 'h' ? fl(v, e.pos) : fl(e.pos, v));
       for (const sp of sps) {
+        const ra = Pc(sp.a),
+          rb = Pc(sp.b);
         parts = tenonsInto(
           parts,
           opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
           { part: b.key, a: { x: sp.a - b.bs, y: 0 }, b: { x: sp.b - b.bs, y: 0 } },
           'roof',
-          Pc(sp.a),
-          Pc(sp.b),
+          ra,
+          rb,
         );
+        const mx = (ra.x + rb.x) / 2,
+          my = (ra.y + rb.y) / 2;
+        const hw = (sp.width + Math.max(0, d.clearance)) / 2 + 1.5;
+        const ht = (t + Math.max(0, d.clearance)) / 2 + 1.5;
+        shapedRoofExcl.push(e.axis === 'h' ? [mx - hw, my - ht, mx + hw, my + ht] : [mx - ht, my - hw, mx + ht, my + hw]);
       }
     }
   }
@@ -1263,18 +1718,23 @@ function shapedHouseParts(m: Model, d: HouseDims, openings: Opening[]): BuiltHou
     }
 
   // Cut interior-wall openings on standalone inner walls
+  const hosts = houseWallHosts(m, d);
   const shapedThreshold = sillBaseZ(d.floor, t) - floorZ;
   for (const p of walls) {
     if (memberIds.has(p.it.wall.id)) continue;
     const wallOps = openings.filter((o) => o.wall === p.key);
     if (!wallOps.length) continue;
+    const hostWall = hosts.get(p.key);
     const cuts: SubPath[] = [];
     const wallMarks: SubPath[] = [];
     for (const op of wallOps) {
       const yBot = p.h - (shapedThreshold + op.y);
       const cutThrough = !d.floor && op.y <= 0.01;
       cuts.push(...openingCutouts(op, op.x, yBot, d.mullionWidth, cutThrough));
-      if (d.engraveFrames) wallMarks.push(...openingMarks(op, op.x, yBot, d.frameWidth));
+      if (d.engraveFrames) {
+        const fw = hostWall ? safeFrameWidth(op, hostWall, wallOps, d.frameWidth, t) : d.frameWidth;
+        if (fw > 0) wallMarks.push(...openingMarks(op, op.x, yBot, fw));
+      }
     }
     if (cuts.length) parts[p.key] = host.boolean({ op: 'difference', a: parts[p.key], b: cuts });
     if (wallMarks.length) marks[p.key] = wallMarks;
@@ -1294,14 +1754,24 @@ function shapedHouseParts(m: Model, d: HouseDims, openings: Opening[]): BuiltHou
     const bMarks: SubPath[] = [];
     for (const [wk, sp] of Object.entries(sidePos) as [OuterWallKey, (typeof sidePos)[OuterWallKey]][]) {
       if (b.axis !== sp.axis || Math.abs(b.pos - sp.pos) > 0.05) continue;
-      for (const op of openings.filter((o) => o.wall === wk)) {
+      const wallOps = openings.filter((o) => o.wall === wk);
+      const hostWall = hosts.get(wk);
+      const edgeSpans = b.edges.map((e) => {
+        const [ea, ez] = edgeRange(e, t);
+        return [ea - b.bs, ez - b.bs] as [number, number];
+      });
+      for (const op of wallOps) {
         const panelX = (sp.flipX ? sp.len - op.x : op.x) - t;
         const bx = panelX - b.bs;
-        if (bx - op.w / 2 > t && bx + op.w / 2 < b.be - b.bs - t && shapedThreshold + op.y + op.h < ho - t) {
+        const onOuterEdge = edgeSpans.some(([s0, s1]) => bx - op.w / 2 >= s0 + 0.5 && bx + op.w / 2 <= s1 - 0.5);
+        if (onOuterEdge && shapedThreshold + op.y + op.h <= ho - 0.5) {
           const yBot = ho - (shapedThreshold + op.y);
           const cutThrough = !d.floor && op.y <= 0.01;
           cuts.push(...openingCutouts(op, bx, yBot, d.mullionWidth, cutThrough));
-          if (d.engraveFrames) bMarks.push(...openingMarks(op, bx, yBot, d.frameWidth));
+          if (d.engraveFrames) {
+            const fw = hostWall ? safeFrameWidth(op, hostWall, wallOps, d.frameWidth, t) : d.frameWidth;
+            if (fw > 0) bMarks.push(...openingMarks(op, bx, yBot, fw));
+          }
         }
       }
     }
@@ -1309,13 +1779,11 @@ function shapedHouseParts(m: Model, d: HouseDims, openings: Opening[]): BuiltHou
     if (bMarks.length) marks[b.key] = bMarks;
   }
 
-  // Roof engraving pattern for shaped flat roof (approximated by bounding rect clipped to roof outline if needed)
-  if (roof.pattern !== 'none' && parts.roof?.[0]) {
-    const pts = parts.roof[0].nodes.map((nd): [number, number] => [nd.x, nd.y]);
-    if (pts.length <= 4) {
-      const mks = roofPatternMarks(pts, roof.pattern, roof.patternSize, 2);
-      if (mks.length) marks.roof = mks;
-    }
+  // Roof engraving pattern for shaped flat roof (supports arbitrary concave L/U/C polygons and skips tenon slots)
+  if (roof.pattern !== 'none' && cleanRoofPts.length >= 3) {
+    const margin = rm.flushFlat ? 2 : roof.mount === 'fixed' ? Math.max(2, t + 1) : 2;
+    const mks = roofPatternMarks(cleanRoofPts, roof.pattern, roof.patternSize, margin, shapedRoofExcl);
+    if (mks.length) marks.roof = mks;
   }
 
   for (const b of bs) {
@@ -1352,8 +1820,10 @@ function shapedHouseParts(m: Model, d: HouseDims, openings: Opening[]): BuiltHou
     boards: bs,
     roofPanels,
     trusses: [],
+    rails: [],
+    extraPoses: {},
     outerHeights: {},
-    hosts: houseWallHosts(m, d),
+    hosts,
   };
 }
 
@@ -1393,7 +1863,7 @@ export function turnOver(
   return { parts: outParts, marks: outMarks };
 }
 
-/** 3D assembly poses for every part of the house (floor, walls, boards, roof panels, attic trusses) */
+/** 3D assembly poses for every part of the house (floor, walls, boards, roof panels, trusses, rails, chimney, mid-floor, 3D frames) */
 export function housePoses(built: BuiltHouse, d: HouseDims, keys: string[]): Record<string, Pose> {
   const { W, D, H, t } = d;
   const floorZ = d.floor ? t : 0;
@@ -1411,6 +1881,8 @@ export function housePoses(built: BuiltHouse, d: HouseDims, keys: string[]): Rec
 
   for (const rp of built.roofPanels) all[rp.key] = rp.pose;
   for (const tr of built.trusses) all[tr.key] = tr.pose;
+  for (const rl of built.rails) all[rl.key] = rl.pose;
+  Object.assign(all, built.extraPoses);
 
   const along = (key: string, axis: 'h' | 'v', pos: number, mid: number, z: number, over = false) => {
     const u = axis === 'h' ? X : neg(Y);

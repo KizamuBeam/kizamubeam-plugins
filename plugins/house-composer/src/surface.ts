@@ -5,6 +5,7 @@
 import { mm, type Drawing, type EventResult, type Item, type Pointer, type Surface, type Text } from '../../../sdk/ts';
 import {
   nextOpeningId,
+  safeFrameWidth,
   validateOpenings,
   writeOpenings,
   type Opening,
@@ -28,6 +29,10 @@ export interface HouseSurfaceCtx {
   engraveFrames: boolean;
   frameWidth: number;
   mullionWidth: number;
+  /** Optional intermediate floor elevation Z (mm) */
+  midFloorZ?: number;
+  /** True when the outer footprint is non-rectangular (L/U/C shape) */
+  isShaped?: boolean;
   /** Interior walls currently built (for 'inner' view and plan opening symbols) */
   innerWalls: { id: number; key: string; axis: 'h' | 'v'; pos: number; s: number; e: number; h: number }[];
 }
@@ -44,6 +49,7 @@ interface ElevState {
   drag?: ElevDrag;
   openings?: Opening[];
   selId?: number;
+  wallKey?: string;
 }
 
 const OP_LIST = 'openings';
@@ -55,7 +61,7 @@ const isElevView = (v: string): v is OuterWallKey | 'inner' =>
   v === 'front' || v === 'back' || v === 'left' || v === 'right' || v === 'inner';
 
 function elevStateOf(s: unknown): ElevState {
-  if (s && typeof s === 'object' && ('drag' in s || 'openings' in s || 'selId' in s)) return s as ElevState;
+  if (s && typeof s === 'object' && ('drag' in s || 'openings' in s || 'selId' in s || 'wallKey' in s)) return s as ElevState;
   return {};
 }
 
@@ -63,6 +69,8 @@ function elevStateOf(s: unknown): ElevState {
 export function activeWallKey(ctx: HouseSurfaceCtx, s: Surface): string | null {
   if (s.view === 'front' || s.view === 'back' || s.view === 'left' || s.view === 'right') return s.view;
   if (s.view === 'inner') {
+    const st = elevStateOf(s.state);
+    if (st.wallKey && ctx.innerWalls.some((w) => w.key === st.wallKey)) return st.wallKey;
     const wid = planSelectedId(ctx.plan, s);
     if (wid !== undefined) {
       const found = ctx.innerWalls.find((w) => w.id === wid);
@@ -83,17 +91,29 @@ export function selectedOpeningId(ctx: HouseSurfaceCtx, s: Surface): number | un
   return undefined;
 }
 
-/** Draw architectural door & window symbols + roof overhang/ridge overlay on top of the floor plan view */
+/** Draw architectural door & window symbols + roof overhang/ridge overlay + side labels on top of the floor plan view */
 function planOverlayItems(ctx: HouseSurfaceCtx): { items: Item[]; pad: number } {
   const { plan: pl, W, D, t, roof, openings, innerWalls } = ctx;
   const items: Item[] = [];
 
-  // 1. Subtle roof overhang outline and ridge / hip lines
-  const rl = roofPlanLines(pl.w, pl.d, t, roof);
-  items.push({ type: 'line', pts: rl.outline, closed: true, style: 'muted', width: 1, dash: true, alpha: 0.45 });
-  for (const [a, b] of rl.ridges) {
-    items.push({ type: 'line', pts: [a, b], style: 'muted', width: 1, dash: true, alpha: 0.55 });
+  // 1. Subtle roof overhang outline and ridge / hip lines (only for rectangular footprints)
+  if (!ctx.isShaped) {
+    const rl = roofPlanLines(pl.w, pl.d, t, roof);
+    items.push({ type: 'line', pts: rl.outline, closed: true, style: 'muted', width: 1, dash: true, alpha: 0.45 });
+    for (const [a, b] of rl.ridges) {
+      items.push({ type: 'line', pts: [a, b], style: 'muted', width: 1, dash: true, alpha: 0.55 });
+    }
   }
+
+  // 2. Subtle side compass labels so the user immediately sees which edge matches Front/Back/Left/Right views
+  const maxOh = Math.max(roof.overhang, roof.type === 'gable' || roof.type === 'shed' ? roof.gableOverhang : 0);
+  const lblOff = t + Math.max(8, maxOh + 5);
+  items.push(
+    { type: 'text', x: pl.w / 2, y: pl.d + lblOff, text: { code: 'view.front' }, style: 'muted', align: 'center' },
+    { type: 'text', x: pl.w / 2, y: -lblOff, text: { code: 'view.back' }, style: 'muted', align: 'center' },
+    { type: 'text', x: -lblOff, y: pl.d / 2, text: { code: 'view.left' }, style: 'muted', angle: 90, align: 'center' },
+    { type: 'text', x: pl.w + lblOff, y: pl.d / 2, text: { code: 'view.right' }, style: 'muted', angle: 90, align: 'center' },
+  );
 
   // Helper: draw door swing arc or window glazing line in plan coordinates
   const drawPlanOpening = (
@@ -107,20 +127,15 @@ function planOverlayItems(ctx: HouseSurfaceCtx): { items: Item[]; pad: number } 
     const hw = w / 2;
     const pt = (along: number, across: number): [number, number] => (axis === 'h' ? [along, across] : [across, along]);
     if (kind === 'window') {
-      // Double glazing lines across the wall thickness
       const off = t * 0.45;
       items.push(
         { type: 'line', pts: [pt(centerAlong - hw, pos - off), pt(centerAlong + hw, pos - off)], style: 'accent', width: 1.5, alpha: 0.85 },
         { type: 'line', pts: [pt(centerAlong - hw, pos + off), pt(centerAlong + hw, pos + off)], style: 'accent', width: 1.5, alpha: 0.85 },
       );
     } else {
-      // Door leaf + quarter-circle swing arc into the room
       const hinge = centerAlong - hw;
-      const latch = centerAlong + hw;
       const swing = Math.min(w, Math.max(8, w * 0.85)) * inwardSign;
-      // Open door leaf line
       items.push({ type: 'line', pts: [pt(hinge, pos), pt(hinge, pos + swing)], style: 'accent', width: 1.6, alpha: 0.9 });
-      // Quarter-circle arc from latch to open leaf tip
       const arc: [number, number][] = [];
       const steps = 10;
       for (let i = 0; i <= steps; i++) {
@@ -144,8 +159,7 @@ function planOverlayItems(ctx: HouseSurfaceCtx): { items: Item[]; pad: number } 
     }
   }
 
-  const maxOh = Math.max(roof.overhang, roof.type === 'gable' || roof.type === 'shed' ? roof.gableOverhang : 0);
-  return { items, pad: maxOh };
+  return { items, pad: Math.max(maxOh + 8, 12) };
 }
 
 /** Sample an opening's display polylines in elevation coordinates (x left→right, y down from maxZ to 0) */
@@ -154,13 +168,14 @@ function openingElevationItems(
   maxZ: number,
   floorZ: number,
   selected: boolean,
+  invalid: boolean,
   mullionW: number,
   engraveFrames: boolean,
   frameW: number,
 ): Item[] {
   const items: Item[] = [];
-  const style = selected ? 'accent' : 'normal';
-  const width = selected ? 2.2 : 1.4;
+  const style = invalid ? 'warn' : selected ? 'accent' : 'normal';
+  const width = selected || invalid ? 2.2 : 1.4;
   const id = `op:${op.id}`;
   const yBot = maxZ - (floorZ + op.y);
   const yTop = yBot - op.h;
@@ -198,7 +213,7 @@ function openingElevationItems(
     return pts;
   };
 
-  // Optional subtle frame outline preview
+  // Optional subtle frame outline preview (matching exact clamped engraved frame & window sill / double-door pediment)
   if (engraveFrames && frameW > 0.2) {
     if (op.style === 'round') {
       const r = Math.min(op.w, op.h) / 2;
@@ -206,6 +221,9 @@ function openingElevationItems(
     } else if (op.style === 'arch') {
       const pts = sampleArch(xL - frameW, xR + frameW, yTop - frameW, op.kind === 'door' ? yBot : yBot + frameW);
       items.push({ type: 'line', pts, closed: op.kind !== 'door', style: 'muted', width: 0.8, alpha: 0.55 });
+      if (op.kind !== 'door') {
+        items.push({ type: 'line', pts: [[xL - frameW * 1.4, yBot + frameW], [xR + frameW * 1.4, yBot + frameW]], style: 'muted', width: 0.9, alpha: 0.55 });
+      }
     } else if (op.kind === 'door') {
       items.push({
         type: 'line',
@@ -214,15 +232,33 @@ function openingElevationItems(
         width: 0.8,
         alpha: 0.55,
       });
+      if (op.style === 'double') {
+        items.push({
+          type: 'line',
+          pts: [[xL - frameW * 1.5, yTop - frameW * 1.6], [xR + frameW * 1.5, yTop - frameW * 1.6]],
+          style: 'muted',
+          width: 0.9,
+          alpha: 0.55,
+        });
+      }
     } else {
-      items.push({
-        type: 'line',
-        pts: [[xL - frameW, yTop - frameW], [xR + frameW, yTop - frameW], [xR + frameW, yBot + frameW], [xL - frameW, yBot + frameW]],
-        closed: true,
-        style: 'muted',
-        width: 0.8,
-        alpha: 0.55,
-      });
+      items.push(
+        {
+          type: 'line',
+          pts: [[xL - frameW, yTop - frameW], [xR + frameW, yTop - frameW], [xR + frameW, yBot + frameW], [xL - frameW, yBot + frameW]],
+          closed: true,
+          style: 'muted',
+          width: 0.8,
+          alpha: 0.55,
+        },
+        {
+          type: 'line',
+          pts: [[xL - frameW * 1.4, yBot + frameW * 1.3], [xR + frameW * 1.4, yBot + frameW * 1.3]],
+          style: 'muted',
+          width: 0.9,
+          alpha: 0.55,
+        },
+      );
     }
   }
 
@@ -307,21 +343,77 @@ function elevationDraw(ctx: HouseSurfaceCtx, s: Surface): Drawing {
   const selId = selectedOpeningId(ctx, s);
   const sel = wallOps.find((o) => o.id === selId);
 
+  // Live validation of openings on this wall so collisions/overlaps glow in 'warn' style immediately while dragging
+  const wallIssues = validateOpenings(wallOps, new Map([[wk, host]]), ctx.t, ctx.mullionWidth, false, 0, ctx.midFloorZ).filter(
+    (i) => i.level === 'error',
+  );
+  const invalidIds = new Set<number>();
+  for (const iss of wallIssues) {
+    if (typeof iss.values?.id === 'number') invalidIds.add(iss.values.id);
+    if (typeof iss.values?.id2 === 'number') invalidIds.add(iss.values.id2);
+  }
+
   const L = host.width;
   const maxZ = host.maxZ;
   const floorZ = host.floorZ;
   const sillZ = host.sillZ;
   const padX = Math.max(18, L * 0.14);
   const padY = Math.max(16, maxZ * 0.16);
+  const hasInnerPicker = s.view === 'inner' && ctx.innerWalls.length > 0;
+  const topExtra = hasInnerPicker ? Math.max(14, maxZ * 0.16) : 0;
   const items: Item[] = [];
 
-  // 1. Wall outer silhouette polygon (y = maxZ - Z)
-  const topPts: [number, number][] =
-    wk === 'front' || wk === 'back' || wk === 'left' || wk === 'right'
-      ? wallProfile(wk, ctx.W, ctx.D, ctx.H, ctx.t, ctx.roof).topPoints.map(([x, z]) => [x, maxZ - z])
-      : [[0, 0], [L, 0]];
-  const wallPoly: [number, number][] = [...topPts, [L, maxZ], [0, maxZ]];
-  items.push({ type: 'line', pts: wallPoly, closed: true, style: 'normal', width: 2 });
+  // 0. Clickable interior-wall selector pills above the wall in 'inner' view
+  if (hasInnerPicker) {
+    const pillH = Math.max(7, Math.min(11, maxZ * 0.13));
+    const pillW = Math.max(14, Math.min(24, L / Math.max(3, ctx.innerWalls.length + 0.6)));
+    const gap = Math.max(2.5, pillW * 0.18);
+    const totalW = ctx.innerWalls.length * pillW + (ctx.innerWalls.length - 1) * gap;
+    const startX = (L - totalW) / 2;
+    const yMidPill = -padY * 0.45 - pillH * 0.4;
+    const y0p = yMidPill - pillH / 2;
+    const y1p = yMidPill + pillH / 2;
+    ctx.innerWalls.forEach((iw, idx) => {
+      const x0p = startX + idx * (pillW + gap);
+      const x1p = x0p + pillW;
+      const active = iw.key === wk;
+      const pid = `pickwall:${iw.id}`;
+      items.push(
+        {
+          type: 'line',
+          pts: [[x0p, y0p], [x1p, y0p], [x1p, y1p], [x0p, y1p]],
+          closed: true,
+          style: active ? 'accent' : 'muted',
+          width: active ? 1.8 : 1,
+          id: pid,
+        },
+        {
+          type: 'text',
+          x: (x0p + x1p) / 2,
+          y: yMidPill,
+          text: { code: 'part.wall', values: { id: iw.id } },
+          style: active ? 'accent' : 'muted',
+          align: 'center',
+        },
+      );
+    });
+  }
+
+  // 1. Wall outer silhouette polygon (y = maxZ - Z); for shaped outer walls, highlight actually built spans!
+  if (host.spans?.length) {
+    // Full bounding box as faint dashed guide so cut-out corners are clearly visible
+    items.push({ type: 'line', pts: [[0, 0], [L, 0], [L, maxZ], [0, maxZ]], closed: true, style: 'muted', width: 1, dash: true, alpha: 0.35 });
+    for (const [sa, sb] of host.spans) {
+      items.push({ type: 'line', pts: [[sa, 0], [sb, 0], [sb, maxZ], [sa, maxZ]], closed: true, style: 'normal', width: 2 });
+    }
+  } else {
+    const topPts: [number, number][] =
+      wk === 'front' || wk === 'back' || wk === 'left' || wk === 'right'
+        ? wallProfile(wk, ctx.W, ctx.D, ctx.H, ctx.t, ctx.roof).topPoints.map(([x, z]) => [x, maxZ - z])
+        : [[0, 0], [L, 0]];
+    const wallPoly: [number, number][] = [...topPts, [L, maxZ], [0, maxZ]];
+    items.push({ type: 'line', pts: wallPoly, closed: true, style: 'normal', width: 2 });
+  }
 
   // 2. Floor band at bottom (Z = 0..t) and solid threshold line (Z = sillZ)
   if (floorZ > 0) {
@@ -331,6 +423,16 @@ function elevationDraw(ctx: HouseSurfaceCtx, s: Surface): Drawing {
   if (sillZ > floorZ) {
     const ys = maxZ - sillZ;
     items.push({ type: 'line', pts: [[0, ys], [L, ys]], style: 'muted', width: 0.8, dash: true, alpha: 0.4 });
+  }
+
+  // 2b. Intermediate floor slab band (Z = midFloorZ .. midFloorZ + t) on outer walls
+  if (ctx.midFloorZ !== undefined && !wk.startsWith('wall-')) {
+    const yMidBot = maxZ - ctx.midFloorZ;
+    const yMidTop = maxZ - (ctx.midFloorZ + ctx.t);
+    items.push(
+      { type: 'line', pts: [[0, yMidBot], [L, yMidBot]], style: 'warn', width: 1, dash: true, alpha: 0.55 },
+      { type: 'line', pts: [[0, yMidTop], [L, yMidTop]], style: 'warn', width: 1, dash: true, alpha: 0.55 },
+    );
   }
 
   // 3. Eaves reference line when wall rises above H (gable / shed)
@@ -373,13 +475,14 @@ function elevationDraw(ctx: HouseSurfaceCtx, s: Surface): Drawing {
     align: 'center',
   });
 
-  // 7. Doors & windows on this wall (unselected first, selected on top)
+  // 7. Doors & windows on this wall (unselected first, selected on top) with exact clamped engraved frame width
+  const frameFor = (op: Opening) => (ctx.engraveFrames ? safeFrameWidth(op, host, wallOps, ctx.frameWidth, ctx.t) : 0);
   for (const op of wallOps) {
     if (op.id === sel?.id) continue;
-    items.push(...openingElevationItems(op, maxZ, sillZ, false, ctx.mullionWidth, ctx.engraveFrames, ctx.frameWidth));
+    items.push(...openingElevationItems(op, maxZ, sillZ, false, invalidIds.has(op.id), ctx.mullionWidth, ctx.engraveFrames, frameFor(op)));
   }
   if (sel) {
-    items.push(...openingElevationItems(sel, maxZ, sillZ, true, ctx.mullionWidth, ctx.engraveFrames, ctx.frameWidth));
+    items.push(...openingElevationItems(sel, maxZ, sillZ, true, invalidIds.has(sel.id), ctx.mullionWidth, ctx.engraveFrames, frameFor(sel)));
     // Dimension lines for the selected opening
     const yBot = maxZ - (sillZ + sel.y);
     const yTop = yBot - sel.h;
@@ -394,13 +497,20 @@ function elevationDraw(ctx: HouseSurfaceCtx, s: Surface): Drawing {
         { type: 'text', x: xL / 2, y: ym, text: `${mm(r1(xL))}`, style: 'accent', align: 'center', bubble: true },
       );
     }
-    // Width label
+    // Distance from right edge (makes symmetric placement instantly verifiable)
+    if (L - xR > 2) {
+      items.push(
+        { type: 'line', pts: [[xR, ym], [L, ym]], style: 'accent', width: 0.8, dash: true, alpha: 0.65 },
+        { type: 'text', x: (xR + L) / 2, y: ym, text: `${mm(r1(L - xR))}`, style: 'accent', align: 'center', bubble: true },
+      );
+    }
+    // Width × height label
     items.push({
       type: 'text',
       x: sel.x,
       y: yTop - Math.max(4, maxZ * 0.05),
       text: `${mm(r1(sel.w))} × ${mm(r1(sel.h))}`,
-      style: 'accent',
+      style: invalidIds.has(sel.id) ? 'warn' : 'accent',
       align: 'center',
       bubble: true,
     });
@@ -425,19 +535,21 @@ function elevationDraw(ctx: HouseSurfaceCtx, s: Surface): Drawing {
     : undefined;
 
   return {
-    frame: { x0: -padX, y0: -padY * 0.75, x1: L + padX, y1: maxZ + padY * 0.85 },
+    frame: { x0: -padX, y0: -padY * 0.75 - topExtra, x1: L + padX, y1: maxZ + padY * 0.85 },
     items,
     ...(fields ? { fields } : {}),
   };
 }
 
-/** Snap a horizontal center position x to wall center, room centers (between T-joints), other openings, or 1 mm grid */
+/** Snap horizontal center x to wall center, room centers, other openings, symmetric mirrors, or 1 mm grid */
 function snapX(x: number, host: WallHost, others: Opening[], snapDist: number): number {
   const targets: number[] = [host.width / 2];
-  // Room centers between interior wall joints
-  const cuts = [host.marginLeft, ...host.jointXs.sort((a, b) => a - b), host.width - host.marginRight];
+  const cuts = [host.marginLeft, ...[...host.jointXs].sort((a, b) => a - b), host.width - host.marginRight];
   for (let i = 0; i + 1 < cuts.length; i++) targets.push((cuts[i] + cuts[i + 1]) / 2);
-  for (const o of others) targets.push(o.x);
+  for (const o of others) {
+    targets.push(o.x);
+    targets.push(host.width - o.x); // symmetric counterpart across wall center!
+  }
   for (const tg of targets) {
     if (Math.abs(x - tg) <= snapDist) return r2(tg);
   }
@@ -484,20 +596,36 @@ function elevationPointer(ctx: HouseSurfaceCtx, ev: Pointer, s: Surface): EventR
   const sillZ = host.sillZ;
   const snapDist = Math.max(2, ctx.t);
   const rowOf = (ops: Opening[], id: number | undefined) => (id === undefined ? -1 : ops.findIndex((o) => o.id === id));
+  const keepWall = s.view === 'inner' ? { wallKey: wk } : {};
 
   const commit = (ops: Opening[], selId: number | undefined, msg?: Text): EventResult => ({
     patch: { [OP_LIST]: writeOpenings(ops) },
-    state: selId !== undefined ? { selId } : null,
+    state: selId !== undefined || s.view === 'inner' ? { ...keepWall, ...(selId !== undefined ? { selId } : {}) } : null,
     select: { [OP_LIST]: rowOf(ops, selId) },
     ...(msg !== undefined ? { message: msg } : {}),
   });
 
   if (ev.type === 'select' && ev.list === OP_LIST) {
     const op = ev.row !== undefined ? base[ev.row] : undefined;
-    return op ? { state: { selId: op.id }, message: openingMsg(op) } : { state: null, message: '' };
+    return op ? { state: { ...keepWall, selId: op.id }, message: openingMsg(op) } : { state: s.view === 'inner' ? keepWall : null, message: '' };
   }
 
   if (ev.type === 'down') {
+    // Clicking an interior-wall selector pill in 'inner' view switches directly to that interior wall
+    const wMatch = /^pickwall:(\d+)$/.exec(ev.hit ?? '');
+    if (wMatch) {
+      const targetId = Number(wMatch[1]);
+      const targetWall = ctx.innerWalls.find((w) => w.id === targetId);
+      if (targetWall) {
+        const wallRow = ctx.plan.layout.walls.findIndex((w: Wall) => w.id === targetId);
+        return {
+          state: { wallKey: targetWall.key },
+          select: { [OP_LIST]: -1, ...(wallRow >= 0 ? { [WALL_LIST]: wallRow } : {}) },
+          message: { code: 'part.wall', values: { id: targetId } },
+        };
+      }
+    }
+
     const hMatch = /^h:([lrtb]):(\d+)$/.exec(ev.hit ?? '');
     if (hMatch) {
       const id = Number(hMatch[2]);
@@ -505,6 +633,7 @@ function elevationPointer(ctx: HouseSurfaceCtx, ev: Pointer, s: Surface): EventR
       if (!orig) return null;
       return {
         state: {
+          ...keepWall,
           drag: { kind: hMatch[1] as ElevDrag['kind'], id, x0: ev.x, y0: ev.y, orig },
           openings: base,
           selId: id,
@@ -520,6 +649,7 @@ function elevationPointer(ctx: HouseSurfaceCtx, ev: Pointer, s: Surface): EventR
       if (!orig) return null;
       return {
         state: {
+          ...keepWall,
           drag: { kind: 'move', id, x0: ev.x, y0: ev.y, orig },
           openings: base,
           selId: id,
@@ -528,7 +658,7 @@ function elevationPointer(ctx: HouseSurfaceCtx, ev: Pointer, s: Surface): EventR
         message: openingMsg(orig),
       };
     }
-    return { state: null, select: { [OP_LIST]: -1 }, message: '' };
+    return { state: s.view === 'inner' ? keepWall : null, select: { [OP_LIST]: -1 }, message: '' };
   }
 
   if (ev.type === 'move' && st.drag) {
@@ -563,13 +693,13 @@ function elevationPointer(ctx: HouseSurfaceCtx, ev: Pointer, s: Surface): EventR
     }
 
     const updated = base.map((o) => (o.id === g.id ? next : o));
-    return { state: { ...st, openings: updated, selId: g.id }, message: openingMsg(next) };
+    return { state: { ...st, ...keepWall, openings: updated, selId: g.id }, message: openingMsg(next) };
   }
 
   if (ev.type === 'up' && st.drag) {
     const cur = st.openings ?? base;
     if (JSON.stringify(cur) === JSON.stringify(ctx.openings)) {
-      return { state: { selId: st.drag.id } };
+      return { state: { ...keepWall, selId: st.drag.id } };
     }
     const sel = cur.find((o) => o.id === st.drag!.id);
     return commit(cur, st.drag.id, sel ? openingMsg(sel) : undefined);
@@ -619,7 +749,7 @@ function elevationPointer(ctx: HouseSurfaceCtx, ev: Pointer, s: Surface): EventR
   }
 
   if (ev.type === 'key' && ev.key === 'Escape') {
-    return { state: null, select: { [OP_LIST]: -1 }, message: '' };
+    return { state: s.view === 'inner' ? keepWall : null, select: { [OP_LIST]: -1 }, message: '' };
   }
 
   if (ev.type === 'key' && (ev.key === 'Delete' || ev.key === 'Backspace')) {

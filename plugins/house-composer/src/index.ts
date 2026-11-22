@@ -10,7 +10,10 @@ import { buildModel, EPS, mergeWalls, readLayout, scaleLayout, unify, writeLayou
 import { bbox, isRect } from './outline';
 import {
   classicFacadePreset,
+  cottageFacadePreset,
+  duplicateOpeningOnWall,
   findOpeningSpot,
+  modernFacadePreset,
   readOpenings,
   scaleOpenings,
   validateOpenings,
@@ -33,7 +36,10 @@ import {
 } from './parts';
 import {
   computeRoofMetrics,
+  validateChimney,
   validateRoof,
+  type ChimneyPos,
+  type ChimneySpec,
   type OuterWallKey,
   type RoofMount,
   type RoofPattern,
@@ -50,6 +56,9 @@ interface P {
   depth: number;
   height: number;
   floor: boolean;
+  midFloor: boolean;
+  midFloorHeight: number;
+  midFloorStair: boolean;
   wallFront: boolean;
   wallBack: boolean;
   wallLeft: boolean;
@@ -71,7 +80,11 @@ interface P {
   roofMount: string;
   roofPattern: string;
   roofPatternSize: number;
+  chimney: boolean;
+  chimneyPos: string;
+  chimneySize: number;
   engraveFrames: boolean;
+  cutoutFrames: boolean;
   frameWidth: number;
   mullionWidth: number;
   openings: string;
@@ -96,6 +109,14 @@ function roofOf(p: P): RoofSpec {
     mount: p.roofMount === 'removable' ? 'removable' : ('fixed' as RoofMount),
     pattern: (['none', 'tiles', 'shingles', 'seams'].includes(String(p.roofPattern)) ? p.roofPattern : 'none') as RoofPattern,
     patternSize: Math.max(4, Number(p.roofPatternSize) || 10),
+  };
+}
+
+function chimneyOf(p: P): ChimneySpec {
+  return {
+    enabled: !!p.chimney,
+    pos: (['left', 'center', 'right'].includes(String(p.chimneyPos)) ? p.chimneyPos : 'right') as ChimneyPos,
+    size: Math.max(8, Number(p.chimneySize) || 14),
   };
 }
 
@@ -136,10 +157,15 @@ function dims(p: P): { d: HouseDims | null; issues: Issue[]; material: string | 
     clearance: p.clearance,
     kerf: p.kerf,
     floor: !!p.floor,
+    midFloor: !!p.midFloor,
+    midFloorHeight: Number(p.midFloorHeight) || 50,
+    midFloorStair: !!p.midFloorStair,
     sides,
     drop: any ? p.dividerDrop : 0,
     roof: roofOf(p),
+    chimney: chimneyOf(p),
     engraveFrames: !!p.engraveFrames,
+    cutoutFrames: !!p.cutoutFrames,
     frameWidth: Math.max(0.5, Number(p.frameWidth) || 2.5),
     mullionWidth: Math.max(1, Number(p.mullionWidth) || 2),
   };
@@ -195,9 +221,32 @@ function compute(p: P) {
     drop: any ? p.dividerDrop : 0,
   };
 
-  // Validate roof against actual outline shape & dimensions
+  // Validate roof & optional chimney against actual outline shape & dimensions
   const rect = isRect(box.pts);
   issues.push(...validateRoof(db.W, db.D, db.H, db.t, db.roof, rect));
+  if (db.chimney?.enabled) {
+    issues.push(...validateChimney(db.W, db.D, db.H, db.t, db.floor, db.roof, db.chimney, rect, db.clearance));
+  }
+
+  // Validate optional intermediate floor slab
+  let validMidFloorZ: number | undefined;
+  if (db.midFloor) {
+    if (!rect) {
+      issues.push({ key: 'midFloor', level: 'error', code: 'midfloor-needs-rect' });
+    } else {
+      const rm = computeRoofMetrics(db.W, db.D, db.H, db.t, db.roof);
+      const floorZ = db.floor ? db.t : 0;
+      const topZ = rm.flushFlat ? db.H - db.t : db.H;
+      const minMid = floorZ + 2 * db.t + 6;
+      const maxMid = topZ - 3 * db.t - 4;
+      const mz = db.midFloorHeight ?? 50;
+      if (mz < minMid - 0.01 || mz > maxMid + 0.01) {
+        issues.push({ key: 'midFloorHeight', level: 'error', code: 'midfloor-bounds', values: { min: minMid, max: Math.max(minMid, maxMid) } });
+      } else {
+        validMidFloorZ = mz;
+      }
+    }
+  }
 
   // If floor is off, warn/error if any interior wall has two free ends (would float!)
   if (!db.floor) {
@@ -208,9 +257,9 @@ function compute(p: P) {
     }
   }
 
-  // Validate openings against wall silhouettes, joints & overlaps
+  // Validate openings against wall silhouettes, joints, overlaps, mid-floor slab & engraved frame clearance
   const hosts = houseWallHosts(box.model, db);
-  issues.push(...validateOpenings(openings, hosts, db.t, db.mullionWidth));
+  issues.push(...validateOpenings(openings, hosts, db.t, db.mullionWidth, db.engraveFrames, db.frameWidth, validMidFloorZ));
 
   if (issues.some((i) => i.level === 'error')) return { issues, d: db, material, built: null, m, box, openings };
 
@@ -235,12 +284,13 @@ function compute(p: P) {
 function checkIssues(parts: Record<string, SubPath[]>, kerf: number, roofType: RoofType): Issue[] {
   const area = host.context('workArea');
   const found = host.check({ parts: Object.entries(parts).map(([key, subs]) => ({ key, subs })), kerf, ...(area ? { workArea: area } : {}) });
-  // Solid hole-less hip/pyramid roof triangles & trapezoids have natural 45°–55° corners that checkGeom's ray check
-  // flags as thin webs/web-cut; keep all real checks on walls, openings, joints, slots and check-too-big on roofs.
-  const isSolidAngledRoof = (k: string) =>
-    (roofType === 'hip' || roofType === 'pyramid') && k.startsWith('roof-') && !k.startsWith('roof-truss') && (parts[k]?.length ?? 0) === 1;
+  // Hip/pyramid roof triangles & trapezoids have natural 45°–55° outer corners that checkGeom's ray check
+  // flags as thin webs/web-cut; keep all checks active on walls, openings, joints, roof trusses & rails, and check-too-big.
+  const isAngledRoofPanel = (k: string) =>
+    (roofType === 'hip' || roofType === 'pyramid') &&
+    (k === 'roof-front' || k === 'roof-back' || k === 'roof-left' || k === 'roof-right');
   return found
-    .filter((f) => f.level !== 'info' && !((f.code === 'check-web' || f.code === 'check-web-cut') && f.parts.length === 1 && isSolidAngledRoof(f.parts[0])))
+    .filter((f) => f.level !== 'info' && !((f.code === 'check-web' || f.code === 'check-web-cut') && f.parts.length === 1 && isAngledRoofPanel(f.parts[0])))
     .map((f) => ({ level: f.level as 'error' | 'warn', code: f.code, ...(f.values ? { values: f.values } : {}) }));
 }
 
@@ -299,6 +349,8 @@ function surfaceCtx(p: P): HouseSurfaceCtx | null {
     engraveFrames: db.engraveFrames,
     frameWidth: db.frameWidth,
     mullionWidth: db.mullionWidth,
+    midFloorZ: db.midFloor ? db.midFloorHeight : undefined,
+    isShaped: !!(box && !isRect(box.pts)),
     innerWalls,
   };
 }
@@ -369,25 +421,38 @@ function highlightPart(p: P, ctx: HouseSurfaceCtx, s: { view: string; state: unk
   return out;
 }
 
-/** Width or depth changed: ask whether inner walls & openings scale with the house or keep their distances in mm */
+/** Width, depth, or height changed: ask whether inner walls & openings scale proportionally or keep mm sizes */
 function resized(key: string, old: unknown, p: P) {
-  if ((key !== 'width' && key !== 'depth') || typeof old !== 'number') return null;
+  if ((key !== 'width' && key !== 'depth' && key !== 'height') || typeof old !== 'number') return null;
   const t = p.thickness;
   const oW = key === 'width' ? old : p.width;
   const oD = key === 'depth' ? old : p.depth;
+  const oH = key === 'height' ? old : p.height;
   const nW = p.width;
   const nD = p.depth;
+  const nH = p.height;
   const ow = oW - 2 * t,
     od = oD - 2 * t,
     nw = nW - 2 * t,
     nd = nD - 2 * t;
-  if (!(ow > 0 && od > 0 && nw > 0 && nd > 0) || (Math.abs(ow - nw) < 1e-9 && Math.abs(od - nd) < 1e-9)) return null;
+  const changedPlan = Math.abs(ow - nw) >= 1e-9 || Math.abs(od - nd) >= 1e-9;
+  const changedH = Math.abs(oH - nH) >= 1e-9;
+  if (!(ow > 0 && od > 0 && nw > 0 && nd > 0 && oH > 0 && nH > 0) || (!changedPlan && !changedH)) return null;
 
   const l = layoutOf(p, ow, od);
   const m = l && buildModel(l, ow, od, limits(t));
-  const hasWalls = !!(l && m && !(m.box && isRect(m.box.pts) && !m.box.model.walls.length));
+  const hasWalls = !!(changedPlan && l && m && !(m.box && isRect(m.box.pts) && !m.box.model.walls.length));
   const ops = readOpenings(p.openings) ?? [];
   if (!hasWalls && !ops.length) return null;
+
+  const innerAxes = new Map<number, 'h' | 'v'>();
+  if (m?.box) {
+    for (const wi of m.box.model.walls) {
+      innerAxes.set(wi.wall.id, wi.wall.axis);
+      const srcId = m.box.src.get(wi.wall.id);
+      if (srcId !== undefined) innerAxes.set(srcId, wi.wall.axis);
+    }
+  }
 
   const scaledPatch: Record<string, string> = {};
   const keptPatch: Record<string, string> = {};
@@ -397,7 +462,7 @@ function resized(key: string, old: unknown, p: P) {
     Object.assign(keptPatch, writeLayout({ ref: [nw, nd], walls: keepWalls(walls, ow, od, nw, nd) }));
   }
   if (ops.length) {
-    scaledPatch.openings = writeOpenings(scaleOpenings(ops, oW, oD, nW, nD));
+    scaledPatch.openings = writeOpenings(scaleOpenings(ops, oW, oD, nW, nD, oH, nH, innerAxes, !!p.floor, t));
   }
   return {
     ask: {
@@ -435,7 +500,7 @@ function sideToggled(side: Side, p: P) {
 
 definePlugin<P>({
   onChange({ key, old, params }): Change | null {
-    if (key === 'width' || key === 'depth') return resized(key, old, params);
+    if (key === 'width' || key === 'depth' || key === 'height') return resized(key, old, params);
     if (key in SIDE_KEYS) return sideToggled(SIDE_KEYS[key], params);
     // Keep roof angle & height in sync when switching roofSizeMode
     if (key === 'roofSizeMode' && typeof old === 'string') {
@@ -498,15 +563,30 @@ definePlugin<P>({
       };
     }
 
-    if (action === 'presetClassic') {
+    if (action === 'presetClassic' || action === 'presetModern' || action === 'presetCottage') {
       const W = ctx ? ctx.W : params.width;
       const D = ctx ? ctx.D : params.depth;
       const H = ctx ? ctx.H : params.height;
       const t = ctx ? ctx.t : params.thickness;
-      const preset = classicFacadePreset(W, D, H, t, !!params.floor);
+      const mw = ctx ? ctx.mullionWidth : Math.max(1, Number(params.mullionWidth) || 2);
+      const midZ = params.midFloor ? Number(params.midFloorHeight) || 50 : undefined;
+      const preset =
+        action === 'presetModern'
+          ? modernFacadePreset(W, D, H, t, !!params.floor, ctx?.hosts, mw, midZ)
+          : action === 'presetCottage'
+            ? cottageFacadePreset(W, D, H, t, !!params.floor, ctx?.hosts, ctx?.roof ?? roofOf(params), mw, midZ)
+            : classicFacadePreset(W, D, H, t, !!params.floor, ctx?.hosts, mw, midZ);
       return {
         patch: { openings: writeOpenings(preset) },
         select: { openings: preset.length ? 0 : -1 },
+      };
+    }
+
+    if (action === 'clearOpenings') {
+      return {
+        patch: { openings: '[]' },
+        select: { openings: -1 },
+        ...(surface ? { state: null } : {}),
       };
     }
 
@@ -524,7 +604,12 @@ definePlugin<P>({
       return {
         patch: { openings: writeOpenings(next) },
         select: { openings: row },
-        ...(surface ? { view: nextWall.startsWith('wall-') ? 'inner' : nextWall, state: { selId: cur.id } } : {}),
+        ...(surface
+          ? {
+              view: nextWall.startsWith('wall-') ? 'inner' : nextWall,
+              state: nextWall.startsWith('wall-') ? { selId: cur.id, wallKey: nextWall } : { selId: cur.id },
+            }
+          : {}),
       };
     }
 
@@ -535,6 +620,34 @@ definePlugin<P>({
       const cx = Math.round((hostWall.width / 2) * 100) / 100;
       const next = ops.map((o, i) => (i === row ? { ...o, x: cx } : o));
       return { patch: { openings: writeOpenings(next) }, select: { openings: row } };
+    }
+
+    if (action === 'mirrorOpening' && row !== undefined && row >= 0 && row < ops.length && ctx) {
+      const cur = ops[row];
+      const hostWall = ctx.hosts.get(cur.wall);
+      if (!hostWall) return null;
+      const mx = Math.round((hostWall.width - cur.x) * 100) / 100;
+      const next = ops.map((o, i) => (i === row ? { ...o, x: mx } : o));
+      return { patch: { openings: writeOpenings(next) }, select: { openings: row } };
+    }
+
+    if (action === 'duplicateOpening' && row !== undefined && row >= 0 && row < ops.length && ctx) {
+      const cur = ops[row];
+      const hostWall = ctx.hosts.get(cur.wall);
+      if (!hostWall) return { message: { code: 'elev.wall-off' } };
+      const dup = duplicateOpeningOnWall(cur, hostWall, ops, ctx.t, ctx.mullionWidth);
+      if (!dup) return { message: { code: 'opening-no-space' } };
+      const next = [...ops, dup];
+      return {
+        patch: { openings: writeOpenings(next) },
+        select: { openings: next.length - 1 },
+        ...(surface
+          ? {
+              view: dup.wall.startsWith('wall-') ? 'inner' : dup.wall,
+              state: dup.wall.startsWith('wall-') ? { selId: dup.id, wallKey: dup.wall } : { selId: dup.id },
+            }
+          : {}),
+      };
     }
 
     return null;
@@ -576,6 +689,10 @@ definePlugin<P>({
     const labels: Record<string, Text> = {};
     for (const w of c.built.walls) labels[w.key] = { code: 'part.wall', values: { id: c.box.src.get(w.it.wall.id) ?? w.it.wall.id } };
     for (const b of c.built.boards) labels[b.key] = { code: 'part.wall', values: { id: Math.min(...b.edges.map((e) => c.box!.edgeWall[e.k])) } };
+    for (const key of keys) {
+      const fm = /^frame-(\d+)$/.exec(key);
+      if (fm) labels[key] = { code: 'part.frame', values: { id: Number(fm[1]) } };
+    }
 
     const rm = computeRoofMetrics(c.d.W, c.d.D, c.d.H, c.d.t, c.d.roof);
     const doors = c.openings.filter((o) => o.kind === 'door').length;
