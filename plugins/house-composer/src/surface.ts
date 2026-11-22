@@ -29,6 +29,8 @@ export interface HouseSurfaceCtx {
   engraveFrames: boolean;
   frameWidth: number;
   mullionWidth: number;
+  /** Optional intermediate floor elevation Z (mm) */
+  midFloorZ?: number;
   /** True when the outer footprint is non-rectangular (L/U/C shape) */
   isShaped?: boolean;
   /** Interior walls currently built (for 'inner' view and plan opening symbols) */
@@ -342,7 +344,9 @@ function elevationDraw(ctx: HouseSurfaceCtx, s: Surface): Drawing {
   const sel = wallOps.find((o) => o.id === selId);
 
   // Live validation of openings on this wall so collisions/overlaps glow in 'warn' style immediately while dragging
-  const wallIssues = validateOpenings(wallOps, new Map([[wk, host]]), ctx.t, ctx.mullionWidth).filter((i) => i.level === 'error');
+  const wallIssues = validateOpenings(wallOps, new Map([[wk, host]]), ctx.t, ctx.mullionWidth, false, 0, ctx.midFloorZ).filter(
+    (i) => i.level === 'error',
+  );
   const invalidIds = new Set<number>();
   for (const iss of wallIssues) {
     if (typeof iss.values?.id === 'number') invalidIds.add(iss.values.id);
@@ -419,6 +423,16 @@ function elevationDraw(ctx: HouseSurfaceCtx, s: Surface): Drawing {
   if (sillZ > floorZ) {
     const ys = maxZ - sillZ;
     items.push({ type: 'line', pts: [[0, ys], [L, ys]], style: 'muted', width: 0.8, dash: true, alpha: 0.4 });
+  }
+
+  // 2b. Intermediate floor slab band (Z = midFloorZ .. midFloorZ + t) on outer walls
+  if (ctx.midFloorZ !== undefined && !wk.startsWith('wall-')) {
+    const yMidBot = maxZ - ctx.midFloorZ;
+    const yMidTop = maxZ - (ctx.midFloorZ + ctx.t);
+    items.push(
+      { type: 'line', pts: [[0, yMidBot], [L, yMidBot]], style: 'warn', width: 1, dash: true, alpha: 0.55 },
+      { type: 'line', pts: [[0, yMidTop], [L, yMidTop]], style: 'warn', width: 1, dash: true, alpha: 0.55 },
+    );
   }
 
   // 3. Eaves reference line when wall rises above H (gable / shed)

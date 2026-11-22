@@ -1234,3 +1234,168 @@ export function roofPlanLines(w: number, d: number, t: number, spec: RoofSpec): 
   }
   return { outline, ridges };
 }
+
+export type ChimneyPos = 'left' | 'center' | 'right';
+
+export interface ChimneySpec {
+  enabled: boolean;
+  pos: ChimneyPos;
+  size: number;
+}
+
+export interface ChimneyGeom {
+  roofKey: string;
+  /** 3D center (X, Y) of the vertical chimney shaft */
+  cx: number;
+  cy: number;
+  /** Square outer width of the chimney shaft */
+  size: number;
+  /** Vertical Z bounds of the 4 finger-jointed chimney walls */
+  zBot: number;
+  zTop: number;
+  /** Exact rectangular cutout [x0, y0, x1, y1] in roofKey local coordinates (accounts for roof tilt & thickness) */
+  holeBox: [number, number, number, number];
+}
+
+/** Compute exact 3D placement and tilted roof cutout for an optional chimney on gable, shed, or flat roofs */
+export function buildChimneyGeom(
+  W: number,
+  D: number,
+  H: number,
+  t: number,
+  floor: boolean,
+  spec: RoofSpec,
+  roofPanels: RoofPanelGeom[],
+  chimney: ChimneySpec,
+  clearance = 0,
+): ChimneyGeom | null {
+  if (!chimney.enabled) return null;
+  if (spec.type !== 'gable' && spec.type !== 'shed' && spec.type !== 'flat') return null;
+
+  const m = computeRoofMetrics(W, D, H, t, spec);
+  const S = chimney.size;
+  const cl = Math.max(0, clearance);
+  const ca = Math.cos(m.pitchRad);
+  const tanA = Math.tan(m.pitchRad);
+  const posSign = chimney.pos === 'left' ? -1 : chimney.pos === 'right' ? 1 : 0;
+
+  let roofKey = 'roof';
+  let xr = 0;
+  let yr = 0;
+  let cx = W / 2;
+  let cy = D / 2;
+  let cz = H;
+
+  const rpByKey = new Map(roofPanels.map((r) => [r.key, r]));
+
+  if (spec.type === 'flat') {
+    const rp = rpByKey.get('roof');
+    if (!rp) return null;
+    const maxOffX = Math.max(0, W / 2 - 2 * t - S / 2 - 4);
+    xr = posSign * Math.min(W * 0.24, maxOffX);
+    yr = -Math.min(D * 0.16, Math.max(0, D / 2 - 2 * t - S / 2 - 4));
+    cx = W / 2 + xr;
+    cy = D / 2 - yr;
+    cz = m.flushFlat ? H - t : H;
+  } else if (spec.type === 'gable') {
+    if (spec.ridgeAxis === 'x') {
+      roofKey = 'roof-front';
+      const rp = rpByKey.get(roofKey);
+      if (!rp) return null;
+      const maxOffX = Math.max(0, W / 2 - 2 * t - S / 2 - 4);
+      xr = posSign * Math.min(W * 0.24, maxOffX);
+      const dRidge = Math.max(S / 2 + t * tanA + 2, Math.min(D * 0.22, D / 2 - t - S / 2 - 3));
+      yr = -rp.height / 2 + dRidge / ca;
+      cx = W / 2 + xr;
+      cy = D / 2 - dRidge;
+      cz = H + m.rise - dRidge * tanA;
+    } else {
+      roofKey = 'roof-right';
+      const rp = rpByKey.get(roofKey);
+      if (!rp) return null;
+      const maxOffY = Math.max(0, D / 2 - 2 * t - S / 2 - 4);
+      xr = posSign * Math.min(D * 0.24, maxOffY);
+      const dRidge = Math.max(S / 2 + t * tanA + 2, Math.min(W * 0.22, W / 2 - t - S / 2 - 3));
+      yr = -rp.height / 2 + dRidge / ca;
+      cx = W / 2 + dRidge;
+      cy = D / 2 + xr;
+      cz = H + m.rise - dRidge * tanA;
+    }
+  } else {
+    // Shed roof
+    const rp = rpByKey.get('roof');
+    if (!rp) return null;
+    const alongY = spec.shedDir === 'front' || spec.shedDir === 'back';
+    const cross = alongY ? W : D;
+    const maxOffU = Math.max(0, cross / 2 - 2 * t - S / 2 - 4);
+    xr = posSign * Math.min(cross * 0.24, maxOffU);
+    // Sit slightly uphill from roof midpoint (clear of both high-wall & low-wall removable cleats!)
+    yr = -rp.slopeLen * 0.14;
+    const po = rp.pose;
+    cx = po.o[0] + xr * po.u[0] + yr * po.v[0];
+    cy = po.o[1] + xr * po.u[1] + yr * po.v[1];
+    cz = po.o[2] + xr * po.u[2] + yr * po.v[2];
+  }
+
+  const hw = (S + cl) / 2;
+  const yTopHole = yr - S / (2 * ca) - t * tanA - cl / 2;
+  const yBotHole = yr + S / (2 * ca) + cl / 2;
+
+  const floorZ = floor ? t : 0;
+  const zLow = cz - (S / 2) * tanA;
+  const zHigh = cz + (S / 2) * tanA;
+  const zBot = Math.max(floorZ + 2, Math.min(zLow - t / ca - 1.5, spec.type === 'flat' ? cz - t - 2 : zLow - t / ca - 1.5));
+  const zTop = Math.max(H + m.rise + Math.max(8, S * 0.6), zHigh + Math.max(10, S * 0.75));
+
+  return {
+    roofKey,
+    cx,
+    cy,
+    size: S,
+    zBot,
+    zTop,
+    holeBox: [xr - hw, yTopHole, xr + hw, yBotHole],
+  };
+}
+
+/** Validate chimney size and clearance inside its host roof panel */
+export function validateChimney(
+  W: number,
+  D: number,
+  H: number,
+  t: number,
+  floor: boolean,
+  spec: RoofSpec,
+  chimney: ChimneySpec,
+  isRectOutline: boolean,
+  clearance = 0,
+): RoofIssue[] {
+  if (!chimney.enabled) return [];
+  if (!isRectOutline || (spec.type !== 'gable' && spec.type !== 'shed' && spec.type !== 'flat')) return [];
+
+  const minS = Math.max(10, Math.ceil(3.2 * t));
+  if (chimney.size < minS) {
+    return [{ key: 'chimneySize', level: 'error', code: 'chimney-small', values: { min: minS } }];
+  }
+  const panels = buildRoofPanels(W, D, H, t, spec);
+  const g = buildChimneyGeom(W, D, H, t, floor, spec, panels, chimney, clearance);
+  if (!g) return [];
+  const rp = panels.find((p) => p.key === g.roofKey);
+  if (!rp) return [];
+
+  const [x0, y0, x1, y1] = g.holeBox;
+  const pad = t + 2;
+  const maxX = rp.width / 2 - pad;
+  const maxY = rp.height / 2 - pad;
+  // Also keep chimney shaft inside the house's inner footprint [t+1..W-t-1] × [t+1..D-t-1]
+  const inHouse =
+    g.cx - g.size / 2 >= t + 1 &&
+    g.cx + g.size / 2 <= W - t - 1 &&
+    g.cy - g.size / 2 >= t + 1 &&
+    g.cy + g.size / 2 <= D - t - 1;
+  if (!inHouse || x0 < -maxX || x1 > maxX || y0 < -maxY || y1 > maxY) {
+    return [{ key: 'chimneySize', level: 'error', code: 'chimney-no-space' }];
+  }
+  return [];
+}
+

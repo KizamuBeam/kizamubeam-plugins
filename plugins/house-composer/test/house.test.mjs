@@ -1296,6 +1296,231 @@ test('Block 3.3: elevation live warn highlighting, symmetric mirror snap, and pl
   }
 });
 
+test('Block 4.1: chimney builds 5 aligned parts, cuts tilted roof hole, excludes roof engraving, and validates size', () => {
+  const base = defaultParams();
+  const cases = [
+    { roofType: 'gable', ridgeAxis: 'x', chimneyPos: 'left' },
+    { roofType: 'gable', ridgeAxis: 'x', chimneyPos: 'center' },
+    { roofType: 'gable', ridgeAxis: 'x', chimneyPos: 'right' },
+    { roofType: 'gable', ridgeAxis: 'y', chimneyPos: 'right' },
+    { roofType: 'shed', shedDir: 'front', chimneyPos: 'right', roofAngle: 22 },
+    { roofType: 'shed', shedDir: 'back', chimneyPos: 'left', roofAngle: 22 },
+    { roofType: 'shed', shedDir: 'left', chimneyPos: 'center', roofAngle: 22 },
+    { roofType: 'shed', shedDir: 'right', chimneyPos: 'right', roofAngle: 22 },
+    { roofType: 'flat', chimneyPos: 'right', roofOverhang: 6 },
+    { roofType: 'flat', chimneyPos: 'left', roofMount: 'removable', roofOverhang: 6 },
+  ];
+
+  const chimneyKeys = ['chimney-front', 'chimney-back', 'chimney-left', 'chimney-right', 'chimney-cap'];
+
+  for (const c of cases) {
+    const { plugin } = loadPlugin();
+    const p = {
+      ...base,
+      ...c,
+      chimney: true,
+      chimneySize: 14,
+      roofPattern: 'tiles',
+      roofPatternSize: 8,
+      openings: '[]',
+    };
+    const errs = plugin.validate(p).filter((i) => i.level === 'error');
+    assert.equal(errs.length, 0, `Chimney ${JSON.stringify(c)} failed validation: ${JSON.stringify(errs)}`);
+    const res = plugin.generate(p);
+
+    for (const ck of chimneyKeys) {
+      assert.ok(res.parts.some((pt) => pt.key === ck), `Missing ${ck} for ${JSON.stringify(c)}`);
+      assert.ok(res.poses.poses[ck], `Missing 3D pose for ${ck} in ${JSON.stringify(c)}`);
+    }
+
+    // Hollow chimney cap (outer + flue hole) for size=14, t=3 -> flueHalf = 4 >= 2
+    const cap = res.parts.find((pt) => pt.key === 'chimney-cap');
+    assert.ok(cap.subs.length >= 2, `Expected hollow flue cutout in chimney-cap for ${JSON.stringify(c)}`);
+
+    // Roof panel carrying the chimney must have a large hole (>= chimneySize wide) and zero engraving points inside it!
+    const roofParts = res.parts.filter((pt) => pt.key === 'roof' || pt.key.startsWith('roof-'));
+    const roofWithHole = roofParts.find((rp) =>
+      rp.subs.slice(1).some((sp) => {
+        const xs = sp.nodes.map((n) => n.x);
+        const ys = sp.nodes.map((n) => n.y);
+        return Math.max(...xs) - Math.min(...xs) >= 13 && Math.max(...ys) - Math.min(...ys) >= 13;
+      }),
+    );
+    assert.ok(roofWithHole, `Expected chimney roof cutout hole for ${JSON.stringify(c)}`);
+    const chHole = roofWithHole.subs.slice(1).find((sp) => {
+      const xs = sp.nodes.map((n) => n.x);
+      const ys = sp.nodes.map((n) => n.y);
+      return Math.max(...xs) - Math.min(...xs) >= 13 && Math.max(...ys) - Math.min(...ys) >= 13;
+    });
+    const hx0 = Math.min(...chHole.nodes.map((n) => n.x));
+    const hx1 = Math.max(...chHole.nodes.map((n) => n.x));
+    const hy0 = Math.min(...chHole.nodes.map((n) => n.y));
+    const hy1 = Math.max(...chHole.nodes.map((n) => n.y));
+    for (const mk of roofWithHole.marks ?? []) {
+      for (let i = 0; i + 1 < mk.nodes.length; i++) {
+        const a = mk.nodes[i],
+          b = mk.nodes[i + 1];
+        for (let s = 0; s <= 4; s++) {
+          const px = a.x + ((b.x - a.x) * s) / 4;
+          const py = a.y + ((b.y - a.y) * s) / 4;
+          assert.ok(
+            !(px > hx0 - 0.1 && px < hx1 + 0.1 && py > hy0 - 0.1 && py < hy1 + 0.1),
+            `Roof engraving entered chimney cutout for ${JSON.stringify(c)} at (${px.toFixed(2)},${py.toFixed(2)})`,
+          );
+        }
+      }
+    }
+  }
+
+  // Validation rejects too-small chimney for t=3 (min = 3*t + 2 = 11 mm)
+  const { plugin } = loadPlugin();
+  assert.ok(
+    plugin.validate({ ...base, chimney: true, chimneySize: 8 }).some((i) => i.code === 'chimney-small'),
+    'Expected chimney-small validation error for chimneySize=8',
+  );
+});
+
+test('Block 4.2: intermediate floor slab aligns in 3D, cuts stairwell, checks collisions, and drives 2-story presets', () => {
+  const base = defaultParams();
+  const { plugin, jointCalls } = loadPlugin();
+
+  // 1. Two-story house with stairwell cutout & interior ground-floor divider
+  const p2 = {
+    ...base,
+    height: 110,
+    midFloor: true,
+    midFloorHeight: 54,
+    midFloorStair: true,
+    walls: JSON.stringify([{ id: 1, axis: 'v', pos: 57, from: 0, to: 84 }]),
+    wallsRef: JSON.stringify([114, 84]),
+    openings: '[]',
+  };
+  const errs = plugin.validate(p2).filter((i) => i.level === 'error');
+  assert.equal(errs.length, 0, `2-story house failed validation: ${JSON.stringify(errs)}`);
+  const res = plugin.generate(p2);
+  const midPart = res.parts.find((pt) => pt.key === 'mid-floor');
+  assert.ok(midPart, 'Missing mid-floor part');
+  assert.ok(midPart.subs.length >= 2, 'Expected stairwell cutout hole in mid-floor');
+  assert.ok(res.poses.poses['mid-floor'], 'Missing 3D pose for mid-floor');
+
+  // Verify interior wall height is capped cleanly below midFloorHeight (zBot=3..zTop<=54 -> h <= 51)
+  const innerWall = res.parts.find((pt) => pt.key === 'wall-1');
+  const iYs = innerWall.subs[0].nodes.map((n) => n.y);
+  const innerH = Math.max(...iYs) - Math.min(...iYs);
+  assert.ok(innerH <= 54 - p2.thickness + 0.01, `Interior wall height ${innerH} exceeded midFloorHeight clearance`);
+
+  // Verify 3D alignment < 0.001 mm for every mid-floor tenon into outer walls!
+  const midTenons = jointCalls.filter(
+    (jc) => jc.op === 'edge' && jc.options?.kind === 'tenon' && jc.edges[0].part === 'mid-floor',
+  );
+  assert.ok(midTenons.length >= 4, `Expected mid-floor tenons into all 4 outer walls, got ${midTenons.length}`);
+  const poses = res.poses.poses;
+  const t = p2.thickness;
+  for (const jc of midTenons) {
+    const sp = jc.parts['mid-floor'][0];
+    const seg = jc.edges[0].seg;
+    const a = sp.nodes[seg];
+    const b = sp.nodes[(seg + 1) % sp.nodes.length];
+    const p3Slab = applyPose(poses['mid-floor'], (a.x + b.x) / 2, (a.y + b.y) / 2, t / 2);
+
+    const gNodes = jc.parts._guide[0].nodes;
+    const gMidX = (gNodes[0].x + gNodes[1].x) / 2;
+    const gMidY = (gNodes[0].y + gNodes[1].y) / 2;
+    // Match against the target outer wall's inner face (where tenon base meets wall)
+    const wallKeys = ['front', 'back', 'left', 'right'];
+    let bestDist = Infinity;
+    for (const wk of wallKeys) {
+      const wp = poses[wk];
+      const L = wk === 'front' || wk === 'back' ? p2.width : p2.depth;
+      const isTurned = wk === 'back' || wk === 'right';
+      const localX = isTurned ? -(gMidX - L / 2) : gMidX - L / 2;
+      const localY = gMidY - wp.o[2];
+      // Inner face of front/left is s=t, inner face of back/right is s=0
+      const sInner = wk === 'front' || wk === 'left' ? t : 0;
+      const p3Wall = applyPose(wp, localX, localY, sInner);
+      bestDist = Math.min(bestDist, Math.hypot(p3Slab[0] - p3Wall[0], p3Slab[1] - p3Wall[1], p3Slab[2] - p3Wall[2]));
+    }
+    assert.ok(bestDist < 1e-3, `mid-floor tenon 3D mismatch: dist=${bestDist.toFixed(4)} mm`);
+  }
+
+  // 2. Opening crossing midFloorHeight fails with opening-hits-midfloor
+  const hitP = {
+    ...base,
+    height: 110,
+    midFloor: true,
+    midFloorHeight: 54,
+    openings: JSON.stringify([{ id: 1, wall: 'front', kind: 'door', style: 'rect', x: 60, y: 0, w: 22, h: 60 }]),
+  };
+  assert.ok(
+    plugin.validate(hitP).some((i) => i.code === 'opening-hits-midfloor'),
+    'Expected opening-hits-midfloor error when door crosses intermediate floor',
+  );
+
+  // 3. Elevation view draws horizontal dashed warn lines for the intermediate floor slab
+  const elev = plugin.draw({ view: 'front', state: null, selected: { openings: -1, walls: -1 }, have: [], params: hitP });
+  const dashedWarnLines = elev.items.filter((it) => it.type === 'line' && it.style === 'warn' && it.dash);
+  assert.ok(dashedWarnLines.length >= 2, 'Expected dashed intermediate floor slab guide lines in elevation view');
+
+  // 4. All 3 facade presets automatically populate BOTH ground-floor and upper-story windows on a 2-story house!
+  const p2Clean = { ...base, height: 110, midFloor: true, midFloorHeight: 54, openings: '[]' };
+  for (const action of ['presetClassic', 'presetModern', 'presetCottage']) {
+    const ev = plugin.onEvent({ action, params: p2Clean, inputs: {} });
+    const ops = JSON.parse(ev.patch.openings);
+    const upperOps = ops.filter((o) => o.y > 54);
+    const groundOps = ops.filter((o) => o.y < 50);
+    assert.ok(groundOps.length >= 3, `${action} should generate ground-floor openings, got ${groundOps.length}`);
+    assert.ok(upperOps.length >= 3, `${action} should generate upper-story windows, got ${upperOps.length}`);
+    const nextP = { ...p2Clean, ...ev.patch };
+    const pErrs = plugin.validate(nextP).filter((i) => i.level === 'error');
+    assert.equal(pErrs.length, 0, `2-story ${action} failed validation: ${JSON.stringify(pErrs)}`);
+    const pRes = plugin.generate(nextP);
+    assert.ok(pRes.parts.some((pt) => pt.key === 'mid-floor'));
+  }
+});
+
+test('Block 4.3: separate 3D cutout trim frames generate valid exterior overlays and poses for all 6 opening styles', () => {
+  const { plugin } = loadPlugin();
+  const base = defaultParams();
+  const ops = [
+    { id: 1, wall: 'front', kind: 'door', style: 'arch', x: 35, y: 0, w: 22, h: 42 },
+    { id: 2, wall: 'front', kind: 'window', style: 'cross', x: 85, y: 18, w: 20, h: 22 },
+    { id: 3, wall: 'back', kind: 'door', style: 'double', x: 40, y: 0, w: 28, h: 42 },
+    { id: 4, wall: 'back', kind: 'window', style: 'grid', x: 88, y: 18, w: 18, h: 22 },
+    { id: 5, wall: 'left', kind: 'window', style: 'round', x: 45, y: 20, w: 20, h: 20 },
+    { id: 6, wall: 'right', kind: 'window', style: 'rect', x: 45, y: 18, w: 20, h: 22 },
+  ];
+  const p = {
+    ...base,
+    cutoutFrames: true,
+    frameWidth: 3,
+    openings: JSON.stringify(ops),
+  };
+
+  const errs = plugin.validate(p).filter((i) => i.level === 'error');
+  assert.equal(errs.length, 0, `3D cutout frames failed validation: ${JSON.stringify(errs)}`);
+  const res = plugin.generate(p);
+  const t = p.thickness;
+
+  for (const op of ops) {
+    const fk = `frame-${op.id}`;
+    const fp = res.parts.find((pt) => pt.key === fk);
+    assert.ok(fp, `Missing 3D trim frame part ${fk}`);
+    assert.ok(fp.subs.length >= 1 && fp.subs[0].nodes.length >= 4, `Invalid trim frame geometry for ${fk}`);
+    // Window frames are closed rings (outer + inner cutout); door casings are 3-sided open-bottom polygons
+    if (op.kind === 'window') {
+      assert.ok(fp.subs.length >= 2, `Expected ring cutout inside window trim frame ${fk} (${op.style})`);
+    }
+    const pose = res.poses.poses[fk];
+    assert.ok(pose, `Missing 3D pose for ${fk}`);
+    // Verify trim frame sits strictly on the exterior face of its wall!
+    if (op.wall === 'front') assert.equal(pose.o[1], -t);
+    if (op.wall === 'back') assert.equal(pose.o[1], p.depth);
+    if (op.wall === 'left') assert.equal(pose.o[0], -t);
+    if (op.wall === 'right') assert.equal(pose.o[0], p.width);
+  }
+});
+
+
 
 
 

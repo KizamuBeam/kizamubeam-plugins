@@ -9,6 +9,7 @@ import {
   buildWallHosts,
   openingCutouts,
   openingMarks,
+  openingTrimFrame,
   outerWallHost,
   safeFrameWidth,
   sillBaseZ,
@@ -16,12 +17,14 @@ import {
   type WallHost,
 } from './openings';
 import {
+  buildChimneyGeom,
   buildRoofPanels,
   buildRoofRails,
   buildRoofTrusses,
   computeRoofMetrics,
   roofPatternMarks,
   wallProfile,
+  type ChimneySpec,
   type OuterWallKey,
   type RoofExclusion,
   type RoofPanelGeom,
@@ -40,10 +43,15 @@ export interface HouseDims {
   clearance: number;
   kerf: number;
   floor: boolean;
+  midFloor?: boolean;
+  midFloorHeight?: number;
+  midFloorStair?: boolean;
   sides: Record<Side, boolean>;
   drop: number;
   roof: RoofSpec;
+  chimney?: ChimneySpec;
   engraveFrames: boolean;
+  cutoutFrames?: boolean;
   frameWidth: number;
   mullionWidth: number;
 }
@@ -85,6 +93,8 @@ export interface BuiltHouse {
   roofPanels: RoofPanelGeom[];
   trusses: TrussSpec[];
   rails: RoofRailSpec[];
+  /** Extra 3D poses for optional architectural parts (mid-floor, chimney walls & cap, 3D trim frames) */
+  extraPoses: Record<string, Pose>;
   /** Uncentered panel height (maxZ - floorZ or maxZ) for each outer wall, used by 3D poses */
   outerHeights: Partial<Record<OuterWallKey, { topZ: number; botZ: number }>>;
   hosts: Map<string, WallHost>;
@@ -97,12 +107,13 @@ export const outerKey = (k: number) => `outer-${k + 1}`;
 const EPS = 1e-6;
 export const anyOuter = (d: HouseDims) => d.sides.x0 || d.sides.x1 || d.sides.y0 || d.sides.y1;
 
-/** Clear height of interior walls */
+/** Clear height of interior walls (capped under midFloorHeight when an intermediate floor is enabled) */
 export function innerHeight(d: HouseDims): number {
   const m = computeRoofMetrics(d.W, d.D, d.H, d.t, d.roof);
   const floorZ = d.floor ? d.t : 0;
   const lidT = m.flushFlat && anyOuter(d) ? d.t : 0;
-  return anyOuter(d) ? d.H - floorZ - lidT - d.drop : d.H - floorZ;
+  const topCap = d.midFloor && d.midFloorHeight !== undefined ? Math.min(d.H - lidT, d.midFloorHeight) : d.H - lidT;
+  return anyOuter(d) ? topCap - floorZ - d.drop : topCap - floorZ;
 }
 
 /** Height of shaped-outline outer boards (flat roof only) */
@@ -1143,7 +1154,64 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     builtRails.push({ ...rl, length: len, pose });
   }
 
-  // 7b. Roof engraving patterns (clipped to roof panel polygon AND skipping all tenon slot exclusion zones)
+  const extraPoses: Record<string, Pose> = {};
+
+  // 7b. Optional chimney (tilted roof cutout + 4 finger-jointed shaft walls + overhanging flue cap)
+  if (d.chimney?.enabled) {
+    const cg = buildChimneyGeom(W, D, H, t, d.floor, roof, roofPanels, d.chimney, d.clearance);
+    if (cg && parts[cg.roofKey]) {
+      const [hx0, hy0, hx1, hy1] = cg.holeBox;
+      const hole = polygon([[hx0, hy0], [hx1, hy0], [hx1, hy1], [hx0, hy1]]);
+      parts[cg.roofKey] = host.boolean({ op: 'difference', a: parts[cg.roofKey], b: [hole] });
+      (roofExclusions[cg.roofKey] ??= []).push([hx0 - 1.5, hy0 - 1.5, hx1 + 1.5, hy1 + 1.5]);
+
+      const S = cg.size;
+      const chH = cg.zTop - cg.zBot;
+      const chMidZ = (cg.zBot + cg.zTop) / 2;
+      const chFinger = Math.min(finger, Math.max(3, Math.round((chH / 5) * 10) / 10));
+      const chWallKeys = ['chimney-front', 'chimney-back', 'chimney-left', 'chimney-right'] as const;
+      for (const ck of chWallKeys) {
+        parts[ck] = [polygon([[t, 0], [S - t, 0], [S - t, chH], [t, chH]])];
+      }
+      const chCorners: [string, number, string, number][] = [
+        ['chimney-front', t, 'chimney-left', S - t],
+        ['chimney-front', S - t, 'chimney-right', S - t],
+        ['chimney-back', t, 'chimney-left', t],
+        ['chimney-back', S - t, 'chimney-right', t],
+      ];
+      for (const [k1, x1, k2, x2] of chCorners) {
+        keep(
+          joint(parts, opts({ kind: 'finger', fingerWidth: chFinger, direction: 'out' }), [
+            { part: k1, a: { x: x1, y: 0 }, b: { x: x1, y: chH } },
+            { part: k2, a: { x: x2, y: 0 }, b: { x: x2, y: chH } },
+          ]),
+        );
+      }
+      for (const ck of chWallKeys) {
+        parts[ck] = shiftSubs(parts[ck], -S / 2, -chH / 2);
+      }
+      extraPoses['chimney-front'] = { o: [cg.cx, cg.cy - S / 2, chMidZ], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
+      extraPoses['chimney-back'] = { o: [cg.cx, cg.cy + S / 2 - t, chMidZ], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
+      extraPoses['chimney-left'] = { o: [cg.cx - S / 2, cg.cy, chMidZ], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] };
+      extraPoses['chimney-right'] = { o: [cg.cx + S / 2 - t, cg.cy, chMidZ], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] };
+
+      // Chimney cap with hollow flue opening
+      const capHalf = S / 2 + 2;
+      const capOuter = polygon([[-capHalf, -capHalf], [capHalf, -capHalf], [capHalf, capHalf], [-capHalf, capHalf]]);
+      const flueHalf = S / 2 - t;
+      parts['chimney-cap'] =
+        flueHalf >= 2
+          ? host.boolean({
+              op: 'difference',
+              a: [capOuter],
+              b: [polygon([[-flueHalf, -flueHalf], [flueHalf, -flueHalf], [flueHalf, flueHalf], [-flueHalf, flueHalf]])],
+            })
+          : [capOuter];
+      extraPoses['chimney-cap'] = { o: [cg.cx, cg.cy, cg.zTop], u: [1, 0, 0], v: [0, -1, 0], n: [0, 0, 1] };
+    }
+  }
+
+  // 7c. Roof engraving patterns (clipped to roof panel polygon AND skipping all tenon slots & chimney cutout)
   if (roof.pattern !== 'none') {
     const patMargin = roof.mount === 'fixed' ? Math.max(2, t + 1) : 2;
     for (const rp of roofPanels) {
@@ -1168,7 +1236,108 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     return { into: key, at: (y) => ({ x: u, y: s.yBot - p.h + y }) };
   });
 
-  // 9. Cut doors & windows and add engraved frame marks on outer walls & interior walls (BEFORE centering!)
+  // 8b. Optional intermediate floor slab (2nd story) tenoned cleanly into enabled outer walls
+  if (d.midFloor && d.midFloorHeight !== undefined) {
+    const midZ = d.midFloorHeight;
+    const fx0 = sides.x0 ? -W / 2 + t : -W / 2;
+    const fx1 = sides.x1 ? W / 2 - t : W / 2;
+    const fy0 = sides.y0 ? -D / 2 + t : -D / 2;
+    const fy1 = sides.y1 ? D / 2 - t : D / 2;
+    const mw = fx1 - fx0;
+    const md = fy1 - fy0;
+
+    // Partition an outer wall's inner span [xL..xR] around any interior-wall T-joints so tenons stay clear
+    const midEdgeSpans = (wk: OuterWallKey): { a: number; b: number; width: number }[] => {
+      const s = setups.get(wk);
+      if (!s) return [];
+      const padJoint = t / 2 + Math.max(2, t);
+      const blockers = outerInnerJoints[wk].map((jx): [number, number] => [jx - padJoint, jx + padJoint]);
+      let segs: [number, number][] = [[s.xL + t, s.xR - t]];
+      for (const [b0, b1] of blockers) {
+        const next: [number, number][] = [];
+        for (const [a, b] of segs) {
+          if (b1 <= a || b0 >= b) next.push([a, b]);
+          else {
+            if (b0 > a + EPS) next.push([a, b0]);
+            if (b1 < b - EPS) next.push([b1, b]);
+          }
+        }
+        segs = next;
+      }
+      const out: { a: number; b: number; width: number }[] = [];
+      for (const [a, b] of segs) out.push(...roofTenonSpans(a, b, t, finger));
+      return out;
+    };
+
+    const spBack = midEdgeSpans('back');
+    const spFront = midEdgeSpans('front');
+    const spLeft = midEdgeSpans('left');
+    const spRight = midEdgeSpans('right');
+
+    const slabPanel = panel(mw, md, {
+      top: spBack.flatMap((sp) => [sp.a - W / 2 - fx0, sp.b - W / 2 - fx0]),
+      bottom: spFront.flatMap((sp) => [sp.a - W / 2 - fx0, sp.b - W / 2 - fx0]),
+      left: spLeft.flatMap((sp) => [sp.a - D / 2 - fy0, sp.b - D / 2 - fy0]),
+      right: spRight.flatMap((sp) => [sp.a - D / 2 - fy0, sp.b - D / 2 - fy0]),
+    });
+    parts['mid-floor'] = shiftSubs([slabPanel], fx0, fy0);
+
+    const applyMidTenons = (wk: OuterWallKey, sps: { a: number; b: number; width: number }[]) => {
+      const s = setups.get(wk);
+      if (!s || !sps.length) return;
+      const ySlot = s.topZ - (midZ + t / 2);
+      for (const sp of sps) {
+        let aPt: Pt, bPt: Pt;
+        if (wk === 'back') {
+          aPt = { x: sp.a - W / 2, y: fy0 };
+          bPt = { x: sp.b - W / 2, y: fy0 };
+        } else if (wk === 'front') {
+          aPt = { x: sp.b - W / 2, y: fy1 };
+          bPt = { x: sp.a - W / 2, y: fy1 };
+        } else if (wk === 'left') {
+          aPt = { x: fx0, y: sp.b - D / 2 };
+          bPt = { x: fx0, y: sp.a - D / 2 };
+        } else {
+          aPt = { x: fx1, y: sp.a - D / 2 };
+          bPt = { x: fx1, y: sp.b - D / 2 };
+        }
+        parts = tenonsInto(
+          parts,
+          opts({ kind: 'tenon', tenonCount: 1, tenonWidth: sp.width }),
+          { part: 'mid-floor', a: aPt, b: bPt },
+          wk,
+          { x: sp.a, y: ySlot },
+          { x: sp.b, y: ySlot },
+        );
+      }
+    };
+    applyMidTenons('back', spBack);
+    applyMidTenons('front', spFront);
+    applyMidTenons('left', spLeft);
+    applyMidTenons('right', spRight);
+
+    // Optional stairwell cutout in the back-right corner (keeping generous edge web)
+    if (d.midFloorStair && mw >= 28 && md >= 24) {
+      const sw = Math.min(26, mw * 0.3);
+      const sd = Math.min(22, md * 0.3);
+      const padS = Math.max(t + 3, 6);
+      const sx1 = fx1 - padS;
+      const sx0 = sx1 - sw;
+      const sy0 = fy0 + padS;
+      const sy1 = sy0 + sd;
+      if (sx0 > fx0 + padS && sy1 < fy1 - padS) {
+        parts['mid-floor'] = host.boolean({
+          op: 'difference',
+          a: parts['mid-floor'],
+          b: [polygon([[sx0, sy0], [sx1, sy0], [sx1, sy1], [sx0, sy1]])],
+        });
+      }
+    }
+
+    extraPoses['mid-floor'] = { o: [W / 2, D / 2, midZ], u: [1, 0, 0], v: [0, -1, 0], n: [0, 0, 1] };
+  }
+
+  // 9. Cut doors & windows, add engraved frame marks, and optionally build separate 3D trim frames (BEFORE centering!)
   const hosts = houseWallHosts(m, d);
   const sillZ = sillBaseZ(d.floor, t);
   const threshold = sillZ - floorZ;
@@ -1184,9 +1353,17 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
       const yBot = s.topZ - (sillZ + op.y);
       const cutThrough = !d.floor && op.y <= 0.01;
       cuts.push(...openingCutouts(op, cx, yBot, d.mullionWidth, cutThrough));
-      if (d.engraveFrames) {
-        const fw = hostWall ? safeFrameWidth(op, hostWall, wallOps, d.frameWidth, t) : d.frameWidth;
-        if (fw > 0) wallMarks.push(...openingMarks(op, cx, yBot, fw));
+      const fw = hostWall ? safeFrameWidth(op, hostWall, wallOps, d.frameWidth, t) : d.frameWidth;
+      if (d.engraveFrames && fw > 0) wallMarks.push(...openingMarks(op, cx, yBot, fw));
+      if (d.cutoutFrames) {
+        const frameKey = `frame-${op.id}`;
+        const cutFw = Math.max(1.8, fw > 0 ? fw : d.frameWidth);
+        parts[frameKey] = openingTrimFrame(op, cutFw);
+        const opMidZ = sillZ + op.y + op.h / 2;
+        if (s.key === 'front') extraPoses[frameKey] = { o: [op.x, -t, opMidZ], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
+        else if (s.key === 'back') extraPoses[frameKey] = { o: [W - op.x, D, opMidZ], u: [-1, 0, 0], v: [0, 0, -1], n: [0, 1, 0] };
+        else if (s.key === 'left') extraPoses[frameKey] = { o: [-t, D - op.x, opMidZ], u: [0, -1, 0], v: [0, 0, -1], n: [1, 0, 0] };
+        else extraPoses[frameKey] = { o: [W, op.x, opMidZ], u: [0, 1, 0], v: [0, 0, -1], n: [1, 0, 0] };
       }
     }
     if (cuts.length) parts[s.key] = host.boolean({ op: 'difference', a: parts[s.key], b: cuts });
@@ -1215,8 +1392,6 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
   // 10. Center outer walls and inner walls around their bounding centers
   for (const s of setups.values()) {
     const cx = s.L / 2;
-    // Center Y so 3D pose o.z = (topZ + (floor ? 0 : 0)) / 2 — wait: keep wall panel center at (L/2, topZ/2)
-    // so bottom Z=0 is at y = +topZ/2 and top Z=topZ is at y = -topZ/2!
     const cy = s.topZ / 2;
     parts[s.key] = shiftSubs(parts[s.key], -cx, -cy);
     if (marks[s.key]) marks[s.key] = shiftSubs(marks[s.key], -cx, -cy);
@@ -1228,7 +1403,7 @@ export function buildHouseParts(m: Model, d: HouseDims, openings: Opening[]): Bu
     if (marks[p.key]) marks[p.key] = shiftSubs(marks[p.key], -cx, -cy);
   }
 
-  return { parts, marks, info: dedupeInfo(info), walls, boards: [], roofPanels, trusses, rails: builtRails, outerHeights, hosts };
+  return { parts, marks, info: dedupeInfo(info), walls, boards: [], roofPanels, trusses, rails: builtRails, extraPoses, outerHeights, hosts };
 }
 
 /** Translate every node and Bezier handle in a list of SubPaths by (dx, dy) */
@@ -1646,6 +1821,7 @@ function shapedHouseParts(m: Model, d: HouseDims, openings: Opening[]): BuiltHou
     roofPanels,
     trusses: [],
     rails: [],
+    extraPoses: {},
     outerHeights: {},
     hosts,
   };
@@ -1687,7 +1863,7 @@ export function turnOver(
   return { parts: outParts, marks: outMarks };
 }
 
-/** 3D assembly poses for every part of the house (floor, walls, boards, roof panels, attic trusses, roof rails) */
+/** 3D assembly poses for every part of the house (floor, walls, boards, roof panels, trusses, rails, chimney, mid-floor, 3D frames) */
 export function housePoses(built: BuiltHouse, d: HouseDims, keys: string[]): Record<string, Pose> {
   const { W, D, H, t } = d;
   const floorZ = d.floor ? t : 0;
@@ -1706,6 +1882,7 @@ export function housePoses(built: BuiltHouse, d: HouseDims, keys: string[]): Rec
   for (const rp of built.roofPanels) all[rp.key] = rp.pose;
   for (const tr of built.trusses) all[tr.key] = tr.pose;
   for (const rl of built.rails) all[rl.key] = rl.pose;
+  Object.assign(all, built.extraPoses);
 
   const along = (key: string, axis: 'h' | 'v', pos: number, mid: number, z: number, over = false) => {
     const u = axis === 'h' ? X : neg(Y);

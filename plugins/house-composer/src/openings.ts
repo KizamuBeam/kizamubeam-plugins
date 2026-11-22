@@ -75,7 +75,13 @@ export function defaultOpenings(W = 120, D = 90, H = 70, t = 3): Opening[] {
 }
 
 /** Filter candidate preset openings so only valid, non-colliding openings on enabled walls are kept */
-function fitPresetOpenings(candidates: Opening[], hosts: Map<string, WallHost> | undefined, t: number, mullionW = 2): Opening[] {
+function fitPresetOpenings(
+  candidates: Opening[],
+  hosts: Map<string, WallHost> | undefined,
+  t: number,
+  mullionW = 2,
+  midFloorZ?: number,
+): Opening[] {
   if (!hosts) return candidates;
   const accepted: Opening[] = [];
   let id = 1;
@@ -84,7 +90,9 @@ function fitPresetOpenings(candidates: Opening[], hosts: Map<string, WallHost> |
     if (!host) continue;
     const trial: Opening = { ...cand, id };
     const wallOps = accepted.filter((o) => o.wall === cand.wall);
-    const errs = validateOpenings([...wallOps, trial], new Map([[cand.wall, host]]), t, mullionW).filter((i) => i.level === 'error');
+    const errs = validateOpenings([...wallOps, trial], new Map([[cand.wall, host]]), t, mullionW, false, 0, midFloorZ).filter(
+      (i) => i.level === 'error',
+    );
     if (!errs.length) {
       accepted.push(trial);
       id++;
@@ -93,7 +101,43 @@ function fitPresetOpenings(candidates: Opening[], hosts: Map<string, WallHost> |
   return accepted;
 }
 
-/** Generate a balanced classic house facade (front door + symmetrically placed cross windows) scaled to W × D × H */
+/** Helper: append a symmetric row of upper-story windows above an intermediate floor slab */
+function addUpperStoryWindows(
+  out: Opening[],
+  nextId: () => number,
+  W: number,
+  D: number,
+  H: number,
+  t: number,
+  sillZ: number,
+  midFloorZ: number,
+  style: OpeningStyle,
+) {
+  const web = webMin(t);
+  const upBaseZ = midFloorZ + t + web + 2;
+  const upClearH = H - t - web - upBaseZ;
+  if (upClearH < 8) return;
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  const wh = r2(clamp(upClearH * 0.62, 8, Math.min(24, upClearH - 1)));
+  const wy = r2(Math.max(0, upBaseZ - sillZ + (upClearH - wh) * 0.35));
+  const ww = r2(clamp(W * 0.15, 10, 24));
+  const sw = r2(clamp(D * 0.2, 10, Math.min(22, D - 4 * t)));
+
+  // Front & back upper-story windows (2 or 3 evenly spaced)
+  if (W >= ww + 4 * t) {
+    const xs = W >= 3 * ww + 9 * t ? [W * 0.24, W * 0.5, W * 0.76] : W >= 2 * ww + 7 * t ? [W * 0.3, W * 0.7] : [W * 0.5];
+    for (const x of xs) {
+      out.push({ id: nextId(), wall: 'front', kind: 'window', style, x: r2(x), y: wy, w: ww, h: wh });
+      out.push({ id: nextId(), wall: 'back', kind: 'window', style, x: r2(x), y: wy, w: ww, h: wh });
+    }
+  }
+  if (D >= sw + 4 * t) {
+    out.push({ id: nextId(), wall: 'left', kind: 'window', style, x: r2(D / 2), y: wy, w: sw, h: wh });
+    out.push({ id: nextId(), wall: 'right', kind: 'window', style, x: r2(D / 2), y: wy, w: sw, h: wh });
+  }
+}
+
+/** Generate a balanced classic house facade (front door + symmetrically placed cross windows, 2-story aware) */
 export function classicFacadePreset(
   W: number,
   D: number,
@@ -102,25 +146,27 @@ export function classicFacadePreset(
   floor = true,
   hosts?: Map<string, WallHost>,
   mullionW = 2,
+  midFloorZ?: number,
 ): Opening[] {
   const sillZ = sillBaseZ(floor, t);
-  const clearH = Math.max(12, H - sillZ - webMin(t) - t);
+  const groundTopZ = midFloorZ !== undefined ? midFloorZ - webMin(t) : H - webMin(t) - t;
+  const clearH = Math.max(10, groundTopZ - sillZ);
   const out: Opening[] = [];
   let id = 1;
   const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
   // Front door centered on front wall
   const dw = r2(clamp(W * 0.18, 12, Math.min(36, W - 4 * t)));
-  const dh = r2(clamp(clearH * 0.68, 16, Math.max(16, clearH - 1)));
-  const canDoor = dw >= 10 && dh >= 12 && W >= dw + 4 * t && clearH >= dh + 1;
+  const dh = r2(clamp(clearH * (midFloorZ !== undefined ? 0.84 : 0.68), 14, Math.max(14, clearH - 1)));
+  const canDoor = dw >= 10 && dh >= 12 && W >= dw + 4 * t && clearH >= dh + 0.5;
   if (canDoor) {
     out.push({ id: id++, wall: 'front', kind: 'door', style: 'rect', x: r2(W / 2), y: 0, w: dw, h: dh });
   }
 
   // Front flanking windows if enough room beside the door
   const ww = r2(clamp(W * 0.15, 10, 26));
-  const wh = r2(clamp(clearH * 0.35, 10, Math.min(28, clearH - 2 * t)));
-  const wy = r2(clamp(clearH * 0.28, 4, Math.max(4, clearH - wh - 1)));
+  const wh = r2(clamp(clearH * (midFloorZ !== undefined ? 0.5 : 0.35), 8, Math.min(28, clearH - 2)));
+  const wy = r2(clamp(clearH * (midFloorZ !== undefined ? 0.24 : 0.28), 2, Math.max(2, clearH - wh - 1)));
   const sideSpace = (W - (canDoor ? dw : 0)) / 2 - 2 * t;
   if (canDoor && sideSpace >= ww + 2 * t && wh >= 8 && wy + wh <= clearH) {
     const leftX = r2(t + (W / 2 - dw / 2 - t) / 2);
@@ -146,10 +192,11 @@ export function classicFacadePreset(
     out.push({ id: id++, wall: 'right', kind: 'window', style: 'cross', x: r2(D / 2), y: wy, w: sw, h: wh });
   }
 
-  return fitPresetOpenings(out, hosts, t, mullionW);
+  if (midFloorZ !== undefined) addUpperStoryWindows(out, () => id++, W, D, H, t, sillZ, midFloorZ, 'cross');
+  return fitPresetOpenings(out, hosts, t, mullionW, midFloorZ);
 }
 
-/** Generate a modern architectural facade (offset entrance + wide panoramic windows + double patio door) */
+/** Generate a modern architectural facade (offset entrance + wide panoramic windows + double patio door, 2-story aware) */
 export function modernFacadePreset(
   W: number,
   D: number,
@@ -158,18 +205,20 @@ export function modernFacadePreset(
   floor = true,
   hosts?: Map<string, WallHost>,
   mullionW = 2,
+  midFloorZ?: number,
 ): Opening[] {
   const sillZ = sillBaseZ(floor, t);
-  const clearH = Math.max(12, H - sillZ - webMin(t) - t);
+  const groundTopZ = midFloorZ !== undefined ? midFloorZ - webMin(t) : H - webMin(t) - t;
+  const clearH = Math.max(10, groundTopZ - sillZ);
   const out: Opening[] = [];
   let id = 1;
   const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
   const dw = r2(clamp(W * 0.17, 12, Math.min(34, W - 4 * t)));
-  const dh = r2(clamp(clearH * 0.72, 16, Math.max(16, clearH - 1)));
+  const dh = r2(clamp(clearH * (midFloorZ !== undefined ? 0.85 : 0.72), 14, Math.max(14, clearH - 1)));
   const panoW = r2(clamp(W * 0.34, 16, Math.min(64, W - dw - 6 * t)));
-  const panoH = r2(clamp(clearH * 0.44, 10, Math.min(34, clearH - 2 * t)));
-  const panoY = r2(clamp(clearH * 0.26, 4, Math.max(4, clearH - panoH - 1)));
+  const panoH = r2(clamp(clearH * (midFloorZ !== undefined ? 0.56 : 0.44), 8, Math.min(34, clearH - 2)));
+  const panoY = r2(clamp(clearH * 0.22, 2, Math.max(2, clearH - panoH - 1)));
 
   // Front: offset modern door + large panoramic window
   if (W >= dw + panoW + 6 * t && dh >= 12) {
@@ -189,17 +238,18 @@ export function modernFacadePreset(
 
   // Left & Right: clean horizontal ribbon windows
   const ribW = r2(clamp(D * 0.46, 14, Math.min(54, D - 4 * t)));
-  const ribH = r2(clamp(clearH * 0.24, 8, Math.min(18, clearH - 2 * t)));
-  const ribY = r2(clamp(clearH * 0.46, 6, Math.max(6, clearH - ribH - 1)));
+  const ribH = r2(clamp(clearH * (midFloorZ !== undefined ? 0.4 : 0.24), 8, Math.min(18, clearH - 2)));
+  const ribY = r2(clamp(clearH * 0.38, 3, Math.max(3, clearH - ribH - 1)));
   if (D >= ribW + 4 * t && ribH >= 8 && ribY + ribH <= clearH) {
     out.push({ id: id++, wall: 'left', kind: 'window', style: 'rect', x: r2(D / 2), y: ribY, w: ribW, h: ribH });
     out.push({ id: id++, wall: 'right', kind: 'window', style: 'rect', x: r2(D / 2), y: ribY, w: ribW, h: ribH });
   }
 
-  return fitPresetOpenings(out, hosts, t, mullionW);
+  if (midFloorZ !== undefined) addUpperStoryWindows(out, () => id++, W, D, H, t, sillZ, midFloorZ, 'rect');
+  return fitPresetOpenings(out, hosts, t, mullionW, midFloorZ);
 }
 
-/** Generate a cottage / traditional facade (arched door + 6-pane grid & arch windows + round gable attic windows) */
+/** Generate a cottage / traditional facade (arched door + 6-pane grid & arch windows + gable round windows, 2-story aware) */
 export function cottageFacadePreset(
   W: number,
   D: number,
@@ -209,33 +259,35 @@ export function cottageFacadePreset(
   hosts?: Map<string, WallHost>,
   roof?: RoofSpec,
   mullionW = 2,
+  midFloorZ?: number,
 ): Opening[] {
   const sillZ = sillBaseZ(floor, t);
-  const clearH = Math.max(12, H - sillZ - webMin(t) - t);
+  const groundTopZ = midFloorZ !== undefined ? midFloorZ - webMin(t) : H - webMin(t) - t;
+  const clearH = Math.max(10, groundTopZ - sillZ);
   const out: Opening[] = [];
   let id = 1;
   const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
   // Front: arched entrance door + flanking 6-pane grid windows
   const dw = r2(clamp(W * 0.18, 12, Math.min(34, W - 4 * t)));
-  const dh = r2(clamp(clearH * 0.68, 16, Math.max(16, clearH - 1)));
-  const canDoor = dw >= 10 && dh >= 12 && W >= dw + 4 * t && clearH >= dh + 1;
+  const dh = r2(clamp(clearH * (midFloorZ !== undefined ? 0.84 : 0.68), 14, Math.max(14, clearH - 1)));
+  const canDoor = dw >= 10 && dh >= 12 && W >= dw + 4 * t && clearH >= dh + 0.5;
   if (canDoor) {
     out.push({ id: id++, wall: 'front', kind: 'door', style: 'arch', x: r2(W / 2), y: 0, w: dw, h: dh });
   }
 
   const ww = r2(clamp(W * 0.16, 12, 26));
-  const wh = r2(clamp(clearH * 0.36, 12, Math.min(28, clearH - 2 * t)));
-  const wy = r2(clamp(clearH * 0.26, 4, Math.max(4, clearH - wh - 1)));
+  const wh = r2(clamp(clearH * (midFloorZ !== undefined ? 0.52 : 0.36), 8, Math.min(28, clearH - 2)));
+  const wy = r2(clamp(clearH * 0.24, 2, Math.max(2, clearH - wh - 1)));
   const sideSpace = (W - (canDoor ? dw : 0)) / 2 - 2 * t;
-  if (canDoor && sideSpace >= ww + 2 * t && wh >= 10 && wy + wh <= clearH) {
+  if (canDoor && sideSpace >= ww + 2 * t && wh >= 8 && wy + wh <= clearH) {
     const leftX = r2(t + (W / 2 - dw / 2 - t) / 2);
     out.push({ id: id++, wall: 'front', kind: 'window', style: 'grid', x: leftX, y: wy, w: ww, h: wh });
     out.push({ id: id++, wall: 'front', kind: 'window', style: 'grid', x: r2(W - leftX), y: wy, w: ww, h: wh });
   }
 
   // Back: 1 or 2 arched windows
-  if (W >= ww + 4 * t && wh >= 10 && wy + wh <= clearH) {
+  if (W >= ww + 4 * t && wh >= 8 && wy + wh <= clearH) {
     if (W >= 2 * ww + 7 * t) {
       out.push({ id: id++, wall: 'back', kind: 'window', style: 'arch', x: r2(W * 0.3), y: wy, w: ww, h: wh });
       out.push({ id: id++, wall: 'back', kind: 'window', style: 'arch', x: r2(W * 0.7), y: wy, w: ww, h: wh });
@@ -246,10 +298,12 @@ export function cottageFacadePreset(
 
   // Left & Right: arched main windows
   const sw = r2(clamp(D * 0.2, 10, Math.min(24, D - 4 * t)));
-  if (D >= sw + 4 * t && wh >= 10 && wy + wh <= clearH) {
+  if (D >= sw + 4 * t && wh >= 8 && wy + wh <= clearH) {
     out.push({ id: id++, wall: 'left', kind: 'window', style: 'arch', x: r2(D / 2), y: wy, w: sw, h: wh });
     out.push({ id: id++, wall: 'right', kind: 'window', style: 'arch', x: r2(D / 2), y: wy, w: sw, h: wh });
   }
+
+  if (midFloorZ !== undefined) addUpperStoryWindows(out, () => id++, W, D, H, t, sillZ, midFloorZ, 'arch');
 
   // Gable attic round windows when roof is gable and gable rise is tall enough
   if (roof?.type === 'gable' && hosts) {
@@ -267,7 +321,7 @@ export function cottageFacadePreset(
     }
   }
 
-  return fitPresetOpenings(out, hosts, t, mullionW);
+  return fitPresetOpenings(out, hosts, t, mullionW, midFloorZ);
 }
 
 /** Duplicate an existing opening onto a free spot on the same wall (prefers symmetric mirror position first) */
@@ -515,7 +569,7 @@ export function safeFrameWidth(op: Opening, host: WallHost, others: Opening[], r
   return maxF >= 0.4 ? r2(maxF) : 0;
 }
 
-/** Validate all openings against their host walls, roof silhouettes, joints, overlaps, and optional engraved frames */
+/** Validate all openings against their host walls, roof silhouettes, joints, overlaps, mid-floor slab, and optional engraved frames */
 export function validateOpenings(
   openings: Opening[],
   hosts: Map<string, WallHost>,
@@ -523,6 +577,7 @@ export function validateOpenings(
   mullionW: number,
   engraveFrames = false,
   frameW = 0,
+  midFloorZ?: number,
 ): OpeningIssue[] {
   const issues: OpeningIssue[] = [];
   const web = webMin(t);
@@ -594,6 +649,16 @@ export function validateOpenings(
     if (hitsTop) {
       issues.push({ key: 'openings', level: 'error', code: 'opening-outside', values: { id: op.id } });
       continue;
+    }
+
+    // Clearance from optional intermediate floor slab on outer walls
+    if (midFloorZ !== undefined && isOuterWall(op.wall)) {
+      const opBotZ = host.sillZ + op.y;
+      const opTopZ = opBotZ + op.h;
+      if (opTopZ > midFloorZ - web + 0.01 && opBotZ < midFloorZ + t + web - 0.01) {
+        issues.push({ key: 'openings', level: 'error', code: 'opening-hits-midfloor', values: { id: op.id } });
+        continue;
+      }
     }
 
     // Clearance from perpendicular inner wall T-joints on this wall
@@ -819,6 +884,67 @@ export function openingMarks(
     ],
   });
   return marks;
+}
+
+/**
+ * Separate laser-cut 3D exterior trim frame part for one opening, centered at (0, 0) in local panel coords (y down).
+ * Doors get a 3-sided open-bottom casing; windows get a closed frame ring with integrated window sill (for rect/cross/grid/double).
+ */
+export function openingTrimFrame(op: Opening, frameW: number): SubPath[] {
+  const fw = Math.max(1.8, frameW);
+  const hw = op.w / 2;
+  const hh = op.h / 2;
+
+  const reverseNodes = (ns: Node[]): Node[] =>
+    [...ns].reverse().map((n) => {
+      const { cin, cout, ...rest } = n;
+      return { ...rest, ...(cout ? { cin: cout } : {}), ...(cin ? { cout: cin } : {}) };
+    });
+
+  if (op.style === 'round') {
+    const r = Math.min(op.w, op.h) / 2;
+    return [circle(0, 0, r + fw), circle(0, 0, r)];
+  }
+
+  if (op.style === 'arch') {
+    if (op.kind === 'door') {
+      const outer = archAt(0, -hh - fw, hh, op.w + 2 * fw).nodes;
+      const innerRev = reverseNodes(archAt(0, -hh, hh, op.w).nodes);
+      return [{ closed: true, nodes: [...outer, ...innerRev] }];
+    }
+    return [archAt(0, -hh - fw, hh + fw, op.w + 2 * fw), archAt(0, -hh, hh, op.w)];
+  }
+
+  if (op.kind === 'door') {
+    // 3-sided open-bottom rectangular door casing (all 90° corners)
+    return [
+      polygon([
+        [-hw - fw, hh],
+        [-hw - fw, -hh - fw],
+        [hw + fw, -hh - fw],
+        [hw + fw, hh],
+        [hw, hh],
+        [hw, -hh],
+        [-hw, -hh],
+        [-hw, hh],
+      ]),
+    ];
+  }
+
+  // Window: closed rectangular frame with integrated protruding window sill (ears >= 1.2 mm so zero thin webs)
+  const ear = Math.max(1.2, fw * 0.5);
+  const outer = polygon([
+    [-hw - fw, -hh - fw],
+    [hw + fw, -hh - fw],
+    [hw + fw, hh],
+    [hw + fw + ear, hh],
+    [hw + fw + ear, hh + fw],
+    [-hw - fw - ear, hh + fw],
+    [-hw - fw - ear, hh],
+    [-hw - fw, hh],
+  ]);
+  const inner = rectAt(-hw, -hh, hw, hh);
+  return [outer, inner];
 }
 
 /** Find a valid, non-overlapping placement for a newly added door or window on the given wall host */
