@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Build an extension pack (.kzp) from a plugin folder (issue #205): reads <dir>/plugin.json, replaces every
 // plugin "code": "@relative/path" with the file (WebAssembly as Base64, JavaScript as text), adds its SHA-256 and
-// writes <dir>/dist/<pack id>.kzp.
+// writes <dir>/dist/<pack id>.kzp. "iconImage": "@icon.png" and "previewImage": "@preview.png" (or .jpg) become
+// data: URLs the same way.
 //
 // With --build, the code is first built from source with the recipes in the pack's "build" list (fixed recipes,
 // no free commands, so the catalogue build in CI only runs known tools):
@@ -52,6 +53,15 @@ export function buildPluginPack(dir) {
     const bytes = readFileSync(inside(dir, p.code.slice(1)));
     p.sha256 = createHash('sha256').update(bytes).digest('hex');
     p.code = p.runtime === 'wasm' ? bytes.toString('base64') : bytes.toString('utf8');
+  }
+  for (const p of pack.plugins ?? []) {
+    for (const key of ['iconImage', 'previewImage']) {
+      if (typeof p[key] !== 'string' || !p[key].startsWith('@')) continue;
+      const file = p[key].slice(1);
+      const mime = /\.png$/i.test(file) ? 'image/png' : /\.jpe?g$/i.test(file) ? 'image/jpeg' : null;
+      if (!mime) throw new Error(`${key} ${file}: only .png, .jpg and .jpeg files`);
+      p[key] = `data:${mime};base64,${readFileSync(inside(dir, file)).toString('base64')}`;
+    }
   }
   return JSON.stringify(pack, null, 1);
 }

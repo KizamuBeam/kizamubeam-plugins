@@ -29,6 +29,27 @@ function signEd25519(data, seedHex) {
 const entries = [];
 mkdirSync(outDir, { recursive: true });
 
+/**
+ * Icon and preview of the first plugin that has one (iconImage, previewImage as data: URLs): written next to
+ * catalog.json as <id>.icon.png and <id>.preview.png|jpg and named in the entry with SHA-256 and size, the same way
+ * KizamuBeam's scripts/build-catalog.ts does it. The app checks checksum, format and size before showing them.
+ */
+function catalogImages(raw) {
+  const out = {};
+  const plugs = Array.isArray(raw.plugins) ? raw.plugins : [];
+  for (const [kind, key] of [['icon', 'iconImage'], ['preview', 'previewImage']]) {
+    const url = plugs.map((x) => x?.[key]).find((x) => typeof x === 'string');
+    if (!url) continue;
+    const m = /^data:image\/(png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$/.exec(url);
+    if (!m || (kind === 'icon' && m[1] !== 'png')) throw new Error(`${raw.id}: ${key} must be a ${kind === 'icon' ? 'PNG' : 'PNG or JPEG'} data: URL`);
+    const bytes = Buffer.from(m[2], 'base64');
+    const file = `${raw.id}.${kind}.${m[1] === 'png' ? 'png' : 'jpg'}`;
+    writeFileSync(join(outDir, file), bytes);
+    out[kind] = { file, sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
+  }
+  return out;
+}
+
 if (existsSync(pluginsDir)) {
   for (const dirName of readdirSync(pluginsDir).sort()) {
     const dir = join(pluginsDir, dirName);
@@ -74,6 +95,7 @@ if (existsSync(pluginsDir)) {
         plugins: plugs.length,
         ...(plugs.length ? { runtimes, pluginApi, codeSize } : {}),
         ...(network.length ? { network } : {}),
+        ...catalogImages(raw),
         source: `${REPO}/plugins/${dirName}`,
         file,
         sha256: sha256Hex(text),

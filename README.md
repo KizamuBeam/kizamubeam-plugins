@@ -48,6 +48,8 @@ This repository hosts plugins for [KizamuBeam](https://github.com/KizamuBeam/kiz
    npm test
    ```
 
+Optionally, a plugin can bring its own pictures: `"iconImage": "@icon.png"` (square PNG, 32–512 px, at most 128 KB) for its tile in the Toolbox and `"previewImage": "@preview.png"` (PNG or JPEG, 120–2048 px per side, at most 512 KB) for the Extensions window. `npm run pack` puts the files into the pack, and the catalogue publishes them next to `catalog.json`. Keep `icon` as a fallback for older app versions. Details: [Icon and preview picture](https://github.com/KizamuBeam/kizamubeam/blob/main/docs/plugins.md#icon-and-preview-picture).
+
 For the full plugin API reference, see [docs/plugins.md](https://github.com/KizamuBeam/kizamubeam/blob/main/docs/plugins.md) in the main repository.
 
 ## License

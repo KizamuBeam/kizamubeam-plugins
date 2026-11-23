@@ -48,6 +48,8 @@ Dieses Repository enthält Plugins für [KizamuBeam](https://github.com/KizamuBe
    npm test
    ```
 
+Optional kann ein Plugin eigene Bilder mitbringen: `"iconImage": "@icon.png"` (quadratisches PNG, 32–512 px, höchstens 128 KB) für seine Kachel im Werkzeugkasten und `"previewImage": "@preview.png"` (PNG oder JPEG, 120–2048 px je Seite, höchstens 512 KB) für das Fenster Erweiterungen. `npm run pack` übernimmt die Dateien ins Paket, der Katalog veröffentlicht sie neben `catalog.json`. `icon` als Rückfall für ältere App-Versionen behalten. Details: [Icon and preview picture](https://github.com/KizamuBeam/kizamubeam/blob/main/docs/plugins.md#icon-and-preview-picture).
+
 Die vollständige API-Dokumentation steht in [docs/plugins.md](https://github.com/KizamuBeam/kizamubeam/blob/main/docs/plugins.md) im Haupt-Repository.
 
 ## Lizenz
