@@ -2,7 +2,7 @@
   "format": "kizamubeam-pack",
   "formatVersion": 2,
   "id": "org.kizamubeam.house-composer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "minApp": "2.9.0-rc.3",
   "name": {
     "en": "House composer",
@@ -30,6 +30,7 @@
       "runtime": "js",
       "code": "@dist/plugin.js",
       "icon": "home",
+      "previewImage": "@preview.png",
       "dialog": {
         "version": 6,
         "lists": [
