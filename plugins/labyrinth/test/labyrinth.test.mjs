@@ -176,6 +176,26 @@ test('manifest has complete 5-language translations with zero missing or extra k
     for (const col of list.columns) {
       assert.ok(en[col.label], `missing col label: ${col.label}`);
       assert.ok(en[col.title], `missing col title: ${col.title}`);
+      if (['int', 'number', 'length'].includes(col.type)) {
+        assert.ok(Math.abs(col.min) <= 100_000 && Math.abs(col.max) <= 100_000 && col.min <= col.max, `column ${col.key} out of LIMITS.range`);
+      }
+    }
+  }
+  for (const param of spec.params) {
+    if (['length', 'angle', 'int', 'number'].includes(param.type)) {
+      assert.ok(
+        Number.isFinite(param.min) &&
+          Number.isFinite(param.max) &&
+          Number.isFinite(param.def) &&
+          param.min <= param.def &&
+          param.def <= param.max &&
+          Math.abs(param.min) <= 100_000 &&
+          Math.abs(param.max) <= 100_000,
+        `param ${param.key} violates KizamuBeam LIMITS.range`,
+      );
+      if (param.type === 'int') {
+        assert.ok(Number.isInteger(param.min) && Number.isInteger(param.max) && Number.isInteger(param.def), `int param ${param.key} must use integers`);
+      }
     }
   }
 });

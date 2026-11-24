@@ -2,7 +2,7 @@
   "format": "kizamubeam-pack",
   "formatVersion": 2,
   "id": "org.kizamubeam.labyrinth",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minApp": "2.9.0-rc.3",
   "name": {
     "en": "Labyrinth / Tilt Maze",
@@ -146,8 +146,8 @@
           ],
           "def": "dfs"
         },
-        { "key": "seed", "type": "int", "min": 1, "max": 999999, "def": 42 },
-        { "key": "braid", "type": "int", "min": 0, "max": 60, "def": 0, "unit": "%" },
+        { "key": "seed", "type": "int", "min": 1, "max": 99999, "def": 42 },
+        { "key": "braid", "type": "int", "min": 0, "max": 60, "def": 0 },
         { "key": "autoEndpoints", "type": "bool", "def": false },
         { "key": "ballDia", "type": "length", "min": 3, "max": 30, "def": 8, "section": "section.ballWalls" },
         { "key": "ballPlay", "type": "length", "min": 0.4, "max": 6, "def": 1.5, "section": "section.ballWalls" },
