@@ -739,7 +739,7 @@ function commitCustom(
 function handleToolbar(p: MazePlan, hit: string): EventResult | null {
   const { d } = p;
   if (hit === 'tb.generate' || hit === 'tb.seed') {
-    const nextSeed = hit === 'tb.seed' ? (p.seed >= 999999 ? 1 : p.seed + 1) : p.seed;
+    const nextSeed = hit === 'tb.seed' ? (p.seed >= 99999 ? 1 : p.seed + 1) : p.seed;
     const g = generateMazeGrid(d.cols, d.rows, p.algorithm, nextSeed, p.braid);
     const walls = gridToWalls(g);
     const ep = defaultEndpoints(g, p.autoEndpoints);

@@ -350,7 +350,7 @@ definePlugin<MazeParams>({
 
     if (action === 'nextSeed') {
       const cur = Math.max(1, Math.round(Number(params.seed) || 42));
-      const next = cur >= 999999 ? 1 : cur + 1;
+      const next = cur >= 99999 ? 1 : cur + 1;
       return {
         patch: parametricPatch(params, next),
         select: { walls: -1 },
