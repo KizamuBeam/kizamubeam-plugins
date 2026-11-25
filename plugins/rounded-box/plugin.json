@@ -1,0 +1,348 @@
+{
+  "format": "kizamubeam-pack",
+  "formatVersion": 2,
+  "id": "org.kizamubeam.rounded-box",
+  "version": "0.1.0",
+  "minApp": "2.9.7",
+  "name": {
+    "en": "Rounded box",
+    "de": "Box mit runden Kanten",
+    "it": "Scatola con angoli arrotondati"
+  },
+  "description": {
+    "en": "Box with rounded corners from one bent wall strip with living hinge cuts.",
+    "de": "Kasten mit runden Ecken aus einem gebogenen Wandstreifen mit Biegeschnitten.",
+    "it": "Scatola con angoli arrotondati da una striscia piegata con tagli flessibili."
+  },
+  "author": "KizamuBeam",
+  "homepage": "https://github.com/KizamuBeam/kizamubeam-plugins/tree/main/plugins/rounded-box",
+  "build": [
+    {
+      "esbuild": "src/index.ts",
+      "out": "dist/rounded-box.js"
+    }
+  ],
+  "plugins": [
+    {
+      "id": "org.kizamubeam.rounded-box",
+      "type": "generator",
+      "api": 1,
+      "version": 1,
+      "kind": "assembly",
+      "runtime": "js",
+      "code": "@dist/rounded-box.js",
+      "icon": "box",
+      "fit": {
+        "kind": "slot",
+        "play": "clearance"
+      },
+      "host": [
+        "hinge",
+        "nest"
+      ],
+      "context": [
+        "workArea"
+      ],
+      "dialog": {
+        "version": 1
+      },
+      "preview": {
+        "center": true
+      },
+      "params": [
+        {
+          "key": "width",
+          "type": "length",
+          "min": 20,
+          "max": 2000,
+          "def": 160
+        },
+        {
+          "key": "depth",
+          "type": "length",
+          "min": 20,
+          "max": 2000,
+          "def": 110
+        },
+        {
+          "key": "height",
+          "type": "length",
+          "min": 10,
+          "max": 1000,
+          "def": 60
+        },
+        {
+          "key": "radius",
+          "type": "length",
+          "min": 0,
+          "max": 1000,
+          "def": 35
+        },
+        {
+          "key": "lid",
+          "type": "bool",
+          "def": false
+        },
+        {
+          "key": "thickness",
+          "type": "length",
+          "min": 1,
+          "max": 12,
+          "def": 3
+        },
+        {
+          "key": "clearance",
+          "type": "length",
+          "min": -1,
+          "max": 2,
+          "def": 0.1
+        },
+        {
+          "key": "kerf",
+          "type": "length",
+          "min": 0,
+          "max": 1,
+          "def": 0
+        },
+        {
+          "key": "rim",
+          "type": "length",
+          "min": 0,
+          "max": 100,
+          "def": 4
+        },
+        {
+          "key": "hingeKind",
+          "type": "enum",
+          "options": [
+            [
+              "straight",
+              "hingeKind.straight"
+            ],
+            [
+              "wave",
+              "hingeKind.wave"
+            ]
+          ],
+          "def": "straight",
+          "section": "sec.bend"
+        },
+        {
+          "key": "cutLength",
+          "type": "length",
+          "min": 2,
+          "max": 500,
+          "def": 18,
+          "section": "sec.bend"
+        },
+        {
+          "key": "bridge",
+          "type": "length",
+          "min": 0.3,
+          "max": 50,
+          "def": 3,
+          "section": "sec.bend"
+        },
+        {
+          "key": "spacing",
+          "type": "length",
+          "min": 0.3,
+          "max": 20,
+          "def": 1.5,
+          "section": "sec.bend"
+        },
+        {
+          "key": "bendExtra",
+          "type": "length",
+          "min": -5,
+          "max": 5,
+          "def": 0,
+          "section": "sec.bend"
+        },
+        {
+          "key": "tabWidth",
+          "type": "length",
+          "min": 2,
+          "max": 100,
+          "def": 10,
+          "advanced": true
+        },
+        {
+          "key": "tabPitch",
+          "type": "length",
+          "min": 10,
+          "max": 1000,
+          "def": 40,
+          "advanced": true
+        }
+      ],
+      "texts": {
+        "en": {
+          "name": "Rounded box",
+          "desc": "Box with rounded corners: the wall is one strip with living hinge cuts in the corners and tabs in slots of the floor and lid.",
+          "keys": "box round rounded corner bent wall living hinge flex kerf bending",
+          "label": "Rounded box {width} × {depth} × {height}",
+          "width": "Width",
+          "width.title": "Outside of the wall",
+          "depth": "Depth",
+          "depth.title": "Outside of the wall",
+          "height": "Height",
+          "height.title": "Height of the wall between floor and lid",
+          "radius": "Corner radius",
+          "radius.title": "Outside of the wall; half the width or depth gives round ends, both gives a round box",
+          "lid": "Lid",
+          "thickness": "Material thickness",
+          "clearance": "Play",
+          "clearance.title": "Total play of the tabs and dovetails: a slot is this much wider and longer than its tab (negative = press fit)",
+          "kerf": "Kerf",
+          "rim": "Rim",
+          "rim.title": "How far floor and lid reach beyond the wall",
+          "sec.bend": "Bending",
+          "hingeKind": "Pattern",
+          "hingeKind.straight": "Straight cuts",
+          "hingeKind.wave": "Waves",
+          "cutLength": "Cut length",
+          "bridge": "Bridge width",
+          "bridge.title": "Material left between two cuts of a row",
+          "spacing": "Row spacing",
+          "spacing.title": "Distance between the rows of cuts; smaller bends tighter",
+          "bendExtra": "Length per bend",
+          "bendExtra.title": "Added to the strip in each 90° corner when the board stretches (positive) or squeezes (negative) as it bends: measure a test box and correct here",
+          "tabWidth": "Tab width",
+          "tabPitch": "Tab spacing",
+          "tabPitch.title": "Largest distance between two tabs",
+          "part.floor": "Floor",
+          "part.lid": "Lid",
+          "part.wall": "Wall",
+          "part.wall1": "Wall 1",
+          "part.wall2": "Wall 2",
+          "part.wall3": "Wall 3",
+          "part.wall4": "Wall 4",
+          "part.wall5": "Wall 5",
+          "part.wall6": "Wall 6",
+          "info.strip": "Wall length",
+          "info.pieces": "Wall pieces",
+          "info.bend": "Inner bend radius",
+          "info.cuts": "Living hinge cuts",
+          "radius-small": "The corner radius must be at least {min} mm for this thickness.",
+          "radius-large": "The corner radius can be at most {max} mm (half the width or depth).",
+          "height-small": "The wall must be at least {min} mm high for its dovetails and tabs.",
+          "kerf-large": "The kerf is too large for the play and the tabs.",
+          "radius-tight": "Tight bend: {r} mm inside. Cut a test piece of the corner first; a smaller row spacing bends tighter.",
+          "seam-in-bend": "No straight side is long enough for the seam: it lies in a bend and does not bend there.",
+          "joint-in-bend": "The wall is split for the work area and a joint lies in a bend."
+        },
+        "de": {
+          "name": "Box mit runden Kanten",
+          "desc": "Kasten mit runden Ecken: die Wand ist ein Streifen mit Biegeschnitten in den Ecken und Zapfen in Schlitzen von Boden und Deckel.",
+          "keys": "box kasten rund runde ecken gebogen wand biegeschnitt living hinge flex",
+          "label": "Box mit runden Kanten {width} × {depth} × {height}",
+          "width": "Breite",
+          "width.title": "Außenmaß der Wand",
+          "depth": "Tiefe",
+          "depth.title": "Außenmaß der Wand",
+          "height": "Höhe",
+          "height.title": "Höhe der Wand zwischen Boden und Deckel",
+          "radius": "Eckenradius",
+          "radius.title": "Außen an der Wand; die halbe Breite oder Tiefe gibt runde Enden, beides einen runden Kasten",
+          "lid": "Deckel",
+          "thickness": "Materialstärke",
+          "clearance": "Spiel",
+          "clearance.title": "Gesamtspiel der Zapfen und Schwalben: ein Schlitz ist um so viel breiter und länger als sein Zapfen (negativ = Presspassung)",
+          "kerf": "Schnittfuge",
+          "rim": "Rand",
+          "rim.title": "Wie weit Boden und Deckel über die Wand stehen",
+          "sec.bend": "Biegen",
+          "hingeKind": "Muster",
+          "hingeKind.straight": "Gerade Schnitte",
+          "hingeKind.wave": "Wellen",
+          "cutLength": "Schnittlänge",
+          "bridge": "Stegbreite",
+          "bridge.title": "Material zwischen zwei Schnitten einer Reihe",
+          "spacing": "Reihenabstand",
+          "spacing.title": "Abstand der Schnittreihen; kleiner biegt enger",
+          "bendExtra": "Länge je Biegung",
+          "bendExtra.title": "Wird in jeder 90°-Ecke zum Streifen addiert, wenn sich die Platte beim Biegen dehnt (positiv) oder staucht (negativ): Probekasten messen und hier korrigieren",
+          "tabWidth": "Zapfenbreite",
+          "tabPitch": "Zapfenabstand",
+          "tabPitch.title": "Größter Abstand zwischen zwei Zapfen",
+          "part.floor": "Boden",
+          "part.lid": "Deckel",
+          "part.wall": "Wand",
+          "part.wall1": "Wand 1",
+          "part.wall2": "Wand 2",
+          "part.wall3": "Wand 3",
+          "part.wall4": "Wand 4",
+          "part.wall5": "Wand 5",
+          "part.wall6": "Wand 6",
+          "info.strip": "Wandlänge",
+          "info.pieces": "Wandstücke",
+          "info.bend": "Biegeradius innen",
+          "info.cuts": "Biegeschnitte",
+          "radius-small": "Der Eckenradius muss bei dieser Stärke mindestens {min} mm sein.",
+          "radius-large": "Der Eckenradius darf höchstens {max} mm sein (halbe Breite oder Tiefe).",
+          "height-small": "Die Wand muss für Schwalben und Zapfen mindestens {min} mm hoch sein.",
+          "kerf-large": "Die Schnittfuge ist zu groß für Spiel und Zapfen.",
+          "radius-tight": "Enge Biegung: innen {r} mm. Erst ein Probestück der Ecke schneiden; ein kleinerer Reihenabstand biegt enger.",
+          "seam-in-bend": "Keine gerade Seite ist lang genug für den Stoß: er liegt in einer Biegung und biegt sich dort nicht.",
+          "joint-in-bend": "Die Wand ist für die Arbeitsfläche geteilt, und eine Verbindung liegt in einer Biegung."
+        },
+        "it": {
+          "name": "Scatola con angoli arrotondati",
+          "desc": "Scatola con angoli arrotondati: la parete è una striscia con tagli flessibili negli angoli e linguette nelle fessure di fondo e coperchio.",
+          "keys": "scatola arrotondata angoli curva parete cerniera flessibile living hinge",
+          "label": "Scatola arrotondata {width} × {depth} × {height}",
+          "width": "Larghezza",
+          "width.title": "Esterno della parete",
+          "depth": "Profondità",
+          "depth.title": "Esterno della parete",
+          "height": "Altezza",
+          "height.title": "Altezza della parete tra fondo e coperchio",
+          "radius": "Raggio degli angoli",
+          "radius.title": "All’esterno della parete; metà della larghezza o della profondità dà estremità tonde, entrambe una scatola rotonda",
+          "lid": "Coperchio",
+          "thickness": "Spessore del materiale",
+          "clearance": "Gioco",
+          "clearance.title": "Gioco totale di linguette e code di rondine: una fessura è più larga e lunga della sua linguetta di tanto (negativo = a pressione)",
+          "kerf": "Kerf",
+          "rim": "Bordo",
+          "rim.title": "Quanto fondo e coperchio sporgono oltre la parete",
+          "sec.bend": "Piegatura",
+          "hingeKind": "Motivo",
+          "hingeKind.straight": "Tagli dritti",
+          "hingeKind.wave": "Onde",
+          "cutLength": "Lunghezza del taglio",
+          "bridge": "Larghezza del ponte",
+          "bridge.title": "Materiale tra due tagli di una fila",
+          "spacing": "Distanza tra le file",
+          "spacing.title": "Distanza tra le file di tagli; più piccola piega più stretto",
+          "bendExtra": "Lunghezza per piega",
+          "bendExtra.title": "Aggiunta alla striscia in ogni angolo di 90° quando il pannello si allunga (positivo) o si comprime (negativo) piegandosi: misura una scatola di prova e correggi qui",
+          "tabWidth": "Larghezza delle linguette",
+          "tabPitch": "Distanza delle linguette",
+          "tabPitch.title": "Distanza massima tra due linguette",
+          "part.floor": "Fondo",
+          "part.lid": "Coperchio",
+          "part.wall": "Parete",
+          "part.wall1": "Parete 1",
+          "part.wall2": "Parete 2",
+          "part.wall3": "Parete 3",
+          "part.wall4": "Parete 4",
+          "part.wall5": "Parete 5",
+          "part.wall6": "Parete 6",
+          "info.strip": "Lunghezza della parete",
+          "info.pieces": "Pezzi della parete",
+          "info.bend": "Raggio di piega interno",
+          "info.cuts": "Tagli flessibili",
+          "radius-small": "Il raggio degli angoli deve essere almeno {min} mm per questo spessore.",
+          "radius-large": "Il raggio degli angoli può essere al massimo {max} mm (metà della larghezza o della profondità).",
+          "height-small": "La parete deve essere alta almeno {min} mm per code di rondine e linguette.",
+          "kerf-large": "Il kerf è troppo grande per il gioco e le linguette.",
+          "radius-tight": "Piega stretta: {r} mm all’interno. Taglia prima un pezzo di prova dell’angolo; una distanza tra le file minore piega più stretto.",
+          "seam-in-bend": "Nessun lato dritto è abbastanza lungo per la giunzione: si trova in una piega e lì non si piega.",
+          "joint-in-bend": "La parete è divisa per l’area di lavoro e una giunzione si trova in una piega."
+        }
+      }
+    }
+  ]
+}

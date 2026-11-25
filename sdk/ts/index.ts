@@ -67,7 +67,8 @@ export interface GenResult {
   distribute?: { rotate?: boolean };
   /**
    * Where each part sits in space for the 3D view, by part key: a point (x, y) of the outline at height s lies at
-   * o + x·u + y·v + s·n (mm; X right, Y back, Z up)
+   * o + x·u + y·v + s·n (mm; X right, Y back, Z up). The face that lies up on the work area (cut and engraved) faces
+   * −(u×v): for outer parts of a box it should point out of the box (#463).
    */
   poses?: { poses: Record<string, Pose>; spin?: Record<string, number> };
 }
@@ -336,9 +337,46 @@ export interface Host {
    */
   joints(input: { op: 'panel'; v?: JointVersion; width: number; height: number; thickness: number; finger: number; clearance?: number; kerf?: number; edges: [JointPattern, JointPattern, JointPattern, JointPattern]; corners?: boolean }): { v: JointVersion; outline: SubPath };
   joints(input: { op: 'edge'; v?: JointVersion; options: JointOptions; parts: Record<string, SubPath[]>; edges: { part: string; sub?: number; seg: number }[] }): JointAnswer;
+  /**
+   * The app's living hinge patterns (the Living hinge tool): cuts that fill area (closed sub-paths, holes by even-odd)
+   * so the plate bends there, keeping margin from the outline. Answers the cuts as open sub-paths and an info code,
+   * or only an error code when the pattern does not fit. Codes (hinge-…) have their texts in the app: pass them on as
+   * issue codes or info texts with their values. v is the version of the pattern geometry (only 1 so far).
+   */
+  hinge(input: HingeInput): HingeAnswer;
   /** Report progress 0 … 1 of a long computation, optionally with a short text */
   progress(done: number, text?: string): void;
 }
+/** Input of host.hinge; all options but area and kind default to the Living hinge tool's defaults (mm, degrees) */
+export interface HingeInput {
+  v?: 1;
+  area: SubPath[];
+  kind: 'straight' | 'wave' | 'diamond' | 'honeycomb' | 'triangle' | 'cross' | 'spiral';
+  /** Length of one cut (20) */
+  cutLength?: number;
+  /** Material left between two cuts of a row (3, at least 0.3) */
+  bridge?: number;
+  /** Distance of the rows (1.5, at least 0.3) */
+  spacing?: number;
+  /** Distance of the cuts from the outline (3) */
+  margin?: number;
+  /** Direction of the cuts: auto = along the longer side; vertical for a strip that bends around a vertical axis */
+  orient?: 'auto' | 'vertical' | 'horizontal' | 'angle';
+  /** Degrees, counter-clockwise, 0 = horizontal (orient angle) */
+  angle?: number;
+  waveAmp?: number;
+  waveLength?: number;
+  /** Diamonds: acute angle, 10 … 170 (60) */
+  diamondAngle?: number;
+}
+/** A living hinge message: code hinge-… with its numbers, translated by the app */
+export interface HingeMessage {
+  code: string;
+  values?: Record<string, number>;
+}
+export type HingeAnswer =
+  | { v: 1; subs: SubPath[]; info: HingeMessage[]; error?: undefined }
+  | { v: 1; error: HingeMessage };
 export type JointPattern = 'A' | 'B' | 'flat';
 /** Version of the joint geometry: 2 = clearance is the total play of the joint; 1 (default) = per side along fingers and tenons */
 export type JointVersion = 1 | 2;
