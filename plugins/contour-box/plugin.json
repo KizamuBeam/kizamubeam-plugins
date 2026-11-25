@@ -1,0 +1,360 @@
+{
+  "format": "kizamubeam-pack",
+  "formatVersion": 2,
+  "id": "org.kizamubeam.contour-box",
+  "version": "0.1.0",
+  "minApp": "2.9.10",
+  "name": {
+    "en": "Box from contour",
+    "de": "Box aus Kontur",
+    "it": "Scatola da contorno"
+  },
+  "description": {
+    "en": "Box in any smooth shape from the selection, with a bent wall strip, living hinge cuts and finger joints.",
+    "de": "Kasten in beliebiger runder Form aus der Auswahl, mit gebogenem Wandstreifen, Biegeschnitten und Fingerzinken.",
+    "it": "Scatola di qualsiasi forma arrotondata dalla selezione, con striscia piegata, tagli flessibili e giunzioni a dita."
+  },
+  "author": "KizamuBeam",
+  "homepage": "https://github.com/KizamuBeam/kizamubeam-plugins/tree/main/plugins/contour-box",
+  "build": [
+    {
+      "esbuild": "src/index.ts",
+      "out": "dist/contour-box.js"
+    }
+  ],
+  "plugins": [
+    {
+      "id": "org.kizamubeam.contour-box",
+      "type": "generator",
+      "api": 1,
+      "version": 1,
+      "kind": "assembly",
+      "runtime": "js",
+      "code": "@dist/contour-box.js",
+      "icon": "box",
+      "fit": {
+        "kind": "pair",
+        "play": "clearance",
+        "total": true
+      },
+      "host": [
+        "joints",
+        "hinge",
+        "boolean",
+        "nest"
+      ],
+      "context": [
+        "workArea"
+      ],
+      "inputs": [
+        {
+          "kind": "selection",
+          "action": "fromSelection"
+        }
+      ],
+      "dialog": {
+        "version": 2,
+        "actions": [
+          {
+            "id": "fromSelection",
+            "label": "fromSelection",
+            "title": "fromSelection.title",
+            "inputs": [
+              "selection"
+            ]
+          }
+        ]
+      },
+      "preview": {
+        "center": true
+      },
+      "params": [
+        {
+          "key": "contour",
+          "type": "data",
+          "def": "[[-31.98,49.18],[-34.97,49.64],[-37.97,49.91],[-40.99,50.0],[-44.01,49.91],[-47.02,49.63],[-50.0,49.18],[-52.96,48.54],[-55.87,47.73],[-58.72,46.75],[-61.51,45.59],[-64.22,44.27],[-66.86,42.79],[-69.39,41.15],[-71.82,39.36],[-74.14,37.42],[-76.34,35.35],[-78.41,33.15],[-80.34,30.83],[-82.13,28.4],[-83.77,25.86],[-85.26,23.23],[-86.58,20.52],[-87.73,17.73],[-88.72,14.87],[-89.53,11.96],[-90.16,9.01],[-90.62,6.03],[-90.89,3.02],[-90.98,0.0],[-90.89,-3.02],[-90.62,-6.03],[-90.16,-9.01],[-89.53,-11.96],[-88.72,-14.87],[-87.73,-17.73],[-86.58,-20.52],[-85.26,-23.23],[-83.77,-25.86],[-82.13,-28.4],[-80.34,-30.83],[-78.41,-33.15],[-76.34,-35.35],[-74.14,-37.42],[-71.82,-39.36],[-69.39,-41.15],[-66.86,-42.79],[-64.22,-44.27],[-61.51,-45.59],[-58.72,-46.75],[-55.87,-47.73],[-52.96,-48.54],[-50.0,-49.18],[-47.02,-49.63],[-44.01,-49.91],[-40.99,-50.0],[-37.97,-49.91],[-34.97,-49.64],[-31.98,-49.18],[-28.96,-48.63],[-25.93,-48.08],[-22.91,-47.52],[-19.89,-46.97],[-16.86,-46.42],[-13.84,-45.86],[-10.82,-45.31],[-7.79,-44.76],[-4.77,-44.2],[-1.74,-43.65],[1.28,-43.1],[4.3,-42.54],[7.33,-41.99],[10.35,-41.44],[13.37,-40.88],[16.4,-40.33],[19.42,-39.78],[22.45,-39.22],[25.47,-38.67],[28.49,-38.12],[31.52,-37.56],[34.54,-37.01],[37.56,-36.46],[40.59,-35.9],[43.61,-35.35],[46.64,-34.8],[49.66,-34.24],[52.68,-33.69],[55.71,-33.14],[58.73,-32.58],[61.75,-32.03],[64.78,-31.48],[67.76,-30.78],[70.67,-29.8],[73.47,-28.55],[76.13,-27.04],[78.64,-25.28],[80.97,-23.28],[83.1,-21.07],[85.01,-18.67],[86.67,-16.1],[88.09,-13.38],[89.23,-10.53],[90.1,-7.59],[90.69,-4.58],[90.98,-1.53],[90.98,1.53],[90.69,4.58],[90.1,7.59],[89.23,10.53],[88.09,13.38],[86.67,16.1],[85.01,18.67],[83.1,21.07],[80.97,23.28],[78.64,25.28],[76.13,27.04],[73.47,28.55],[70.67,29.8],[67.76,30.78],[64.78,31.48],[61.75,32.03],[58.73,32.58],[55.71,33.14],[52.68,33.69],[49.66,34.24],[46.64,34.8],[43.61,35.35],[40.59,35.9],[37.56,36.46],[34.54,37.01],[31.52,37.56],[28.49,38.12],[25.47,38.67],[22.45,39.22],[19.42,39.78],[16.4,40.33],[13.37,40.88],[10.35,41.44],[7.33,41.99],[4.3,42.54],[1.28,43.1],[-1.74,43.65],[-4.77,44.2],[-7.79,44.76],[-10.82,45.31],[-13.84,45.86],[-16.86,46.42],[-19.89,46.97],[-22.91,47.52],[-25.93,48.08],[-28.96,48.63]]"
+        },
+        {
+          "key": "measure",
+          "type": "enum",
+          "options": [
+            [
+              "outside",
+              "measure.outside"
+            ],
+            [
+              "inside",
+              "measure.inside"
+            ]
+          ],
+          "def": "outside"
+        },
+        {
+          "key": "height",
+          "type": "length",
+          "min": 10,
+          "max": 1000,
+          "def": 60
+        },
+        {
+          "key": "lid",
+          "type": "bool",
+          "def": true
+        },
+        {
+          "key": "thickness",
+          "type": "length",
+          "min": 1,
+          "max": 12,
+          "def": 3
+        },
+        {
+          "key": "finger",
+          "type": "length",
+          "min": 3,
+          "max": 200,
+          "def": 10
+        },
+        {
+          "key": "clearance",
+          "type": "length",
+          "min": -1,
+          "max": 2,
+          "def": 0.1
+        },
+        {
+          "key": "kerf",
+          "type": "length",
+          "min": 0,
+          "max": 1,
+          "def": 0
+        },
+        {
+          "key": "hingeKind",
+          "type": "enum",
+          "options": [
+            [
+              "straight",
+              "hingeKind.straight"
+            ],
+            [
+              "wave",
+              "hingeKind.wave"
+            ]
+          ],
+          "def": "straight",
+          "section": "sec.bend"
+        },
+        {
+          "key": "cutLength",
+          "type": "length",
+          "min": 2,
+          "max": 500,
+          "def": 18,
+          "section": "sec.bend"
+        },
+        {
+          "key": "bridge",
+          "type": "length",
+          "min": 0.3,
+          "max": 50,
+          "def": 3,
+          "section": "sec.bend"
+        },
+        {
+          "key": "spacing",
+          "type": "length",
+          "min": 0.3,
+          "max": 20,
+          "def": 1.5,
+          "section": "sec.bend"
+        },
+        {
+          "key": "flatRadius",
+          "type": "length",
+          "min": 20,
+          "max": 100000,
+          "def": 300,
+          "section": "sec.bend",
+          "advanced": true
+        }
+      ],
+      "texts": {
+        "en": {
+          "name": "Box from contour",
+          "desc": "Box in any smooth shape from the selection: floor and lid follow the outline, the wall is one strip with living hinge cuts where it bends, joined with finger joints.",
+          "keys": "box contour shape outline round curved bent wall living hinge flex finger joints selection",
+          "label": "Box from contour, {height} high",
+          "fromSelection": "Use selection",
+          "fromSelection.title": "Take the largest closed outline of the selected objects as the shape of the box",
+          "measure": "Outline is",
+          "measure.title": "Whether the selected outline is the outside or the inside of the wall",
+          "measure.outside": "Outside of the wall",
+          "measure.inside": "Inside of the wall",
+          "height": "Height",
+          "height.title": "Outside height, floor and lid included",
+          "lid": "Lid",
+          "thickness": "Material thickness",
+          "finger": "Finger width",
+          "finger.title": "About this wide; the app spreads an even number of fingers around the outline",
+          "clearance": "Play",
+          "clearance.title": "Total play of the finger joints and dovetails (negative = press fit)",
+          "kerf": "Kerf",
+          "sec.bend": "Bending",
+          "hingeKind": "Pattern",
+          "hingeKind.straight": "Straight cuts",
+          "hingeKind.wave": "Waves",
+          "cutLength": "Cut length",
+          "bridge": "Bridge width",
+          "bridge.title": "Material left between two cuts of a row",
+          "spacing": "Row spacing",
+          "spacing.title": "Distance between the rows of cuts; smaller bends tighter",
+          "flatRadius": "Flat above radius",
+          "flatRadius.title": "Parts of the wall that bend less than this radius get no living hinge cuts; the seam and the joints between pieces go there",
+          "part.floor": "Floor",
+          "part.lid": "Lid",
+          "part.wall": "Wall",
+          "part.wall1": "Wall 1",
+          "part.wall2": "Wall 2",
+          "part.wall3": "Wall 3",
+          "part.wall4": "Wall 4",
+          "part.wall5": "Wall 5",
+          "part.wall6": "Wall 6",
+          "part.wall7": "Wall 7",
+          "part.wall8": "Wall 8",
+          "info.size": "Size",
+          "info.strip": "Wall length",
+          "info.pieces": "Wall pieces",
+          "info.bend": "Tightest bend inside",
+          "info.cuts": "Living hinge cuts",
+          "info.fingers": "Fingers",
+          "sel-none": "Select an object with a closed outline first.",
+          "sel-ok": "Shape taken from the selection: {w} × {h} mm.",
+          "contour-none": "No shape yet: select an object with a closed outline and press “Use selection”.",
+          "height-small": "The box must be at least {min} mm high for the finger joints and dovetails.",
+          "bend-sharp": "The outline bends too tightly for the wall: {r} mm inside, at least {min} mm. Round its corners first.",
+          "bend-tight": "Tight bend: {r} mm inside. Cut a test piece first; a smaller row spacing bends tighter.",
+          "seam-in-bend": "No flat part is long enough for the seam: where the ends meet, the wall stays straight for about {len} mm.",
+          "joint-in-bend": "The wall is split for the work area and a joint lies in a bend.",
+          "contour": "Shape"
+        },
+        "de": {
+          "name": "Box aus Kontur",
+          "desc": "Kasten in beliebiger runder Form aus der Auswahl: Boden und Deckel folgen der Kontur, die Wand ist ein Streifen mit Biegeschnitten in den Biegungen, verbunden mit Fingerzinken.",
+          "keys": "box kasten kontur form umriss rund gebogen wand biegeschnitt living hinge flex fingerzinken auswahl",
+          "label": "Box aus Kontur, {height} hoch",
+          "fromSelection": "Auswahl übernehmen",
+          "fromSelection.title": "Die größte geschlossene Kontur der gewählten Objekte wird die Form des Kastens",
+          "measure": "Kontur ist",
+          "measure.title": "Ob die gewählte Kontur die Außen- oder die Innenseite der Wand ist",
+          "measure.outside": "Außenseite der Wand",
+          "measure.inside": "Innenseite der Wand",
+          "height": "Höhe",
+          "height.title": "Außenhöhe mit Boden und Deckel",
+          "lid": "Deckel",
+          "thickness": "Materialstärke",
+          "finger": "Zinkenbreite",
+          "finger.title": "Ungefähr so breit; die App verteilt eine gerade Zahl Zinken um die Kontur",
+          "clearance": "Spiel",
+          "clearance.title": "Gesamtspiel der Fingerzinken und Schwalben (negativ = Presspassung)",
+          "kerf": "Schnittfuge",
+          "sec.bend": "Biegen",
+          "hingeKind": "Muster",
+          "hingeKind.straight": "Gerade Schnitte",
+          "hingeKind.wave": "Wellen",
+          "cutLength": "Schnittlänge",
+          "bridge": "Stegbreite",
+          "bridge.title": "Material zwischen zwei Schnitten einer Reihe",
+          "spacing": "Reihenabstand",
+          "spacing.title": "Abstand der Schnittreihen; kleiner biegt enger",
+          "flatRadius": "Flach ab Radius",
+          "flatRadius.title": "Wandteile, die weniger stark als dieser Radius gebogen sind, bekommen keine Biegeschnitte; dort liegen der Stoß und die Verbindungen zwischen Wandstücken",
+          "part.floor": "Boden",
+          "part.lid": "Deckel",
+          "part.wall": "Wand",
+          "part.wall1": "Wand 1",
+          "part.wall2": "Wand 2",
+          "part.wall3": "Wand 3",
+          "part.wall4": "Wand 4",
+          "part.wall5": "Wand 5",
+          "part.wall6": "Wand 6",
+          "part.wall7": "Wand 7",
+          "part.wall8": "Wand 8",
+          "info.size": "Größe",
+          "info.strip": "Wandlänge",
+          "info.pieces": "Wandstücke",
+          "info.bend": "Engste Biegung innen",
+          "info.cuts": "Biegeschnitte",
+          "info.fingers": "Zinken",
+          "sel-none": "Erst ein Objekt mit geschlossener Kontur auswählen.",
+          "sel-ok": "Form aus der Auswahl übernommen: {w} × {h} mm.",
+          "contour-none": "Noch keine Form: ein Objekt mit geschlossener Kontur auswählen und „Auswahl übernehmen“ drücken.",
+          "height-small": "Der Kasten muss für Fingerzinken und Schwalben mindestens {min} mm hoch sein.",
+          "bend-sharp": "Die Kontur biegt zu eng für die Wand: innen {r} mm, mindestens {min} mm. Erst die Ecken abrunden.",
+          "bend-tight": "Enge Biegung: innen {r} mm. Erst ein Probestück schneiden; ein kleinerer Reihenabstand biegt enger.",
+          "seam-in-bend": "Kein flacher Teil ist lang genug für den Stoß: wo die Enden zusammentreffen, bleibt die Wand auf etwa {len} mm gerade.",
+          "joint-in-bend": "Die Wand ist für die Arbeitsfläche geteilt, und eine Verbindung liegt in einer Biegung.",
+          "contour": "Form"
+        },
+        "it": {
+          "name": "Scatola da contorno",
+          "desc": "Scatola di qualsiasi forma arrotondata dalla selezione: fondo e coperchio seguono il contorno, la parete è una striscia con tagli flessibili dove si piega, unita con giunzioni a dita.",
+          "keys": "scatola contorno forma rotonda curva parete cerniera flessibile living hinge giunzioni a dita selezione",
+          "label": "Scatola da contorno, alta {height}",
+          "fromSelection": "Usa selezione",
+          "fromSelection.title": "Il contorno chiuso più grande degli oggetti selezionati diventa la forma della scatola",
+          "measure": "Il contorno è",
+          "measure.title": "Se il contorno selezionato è l’esterno o l’interno della parete",
+          "measure.outside": "Esterno della parete",
+          "measure.inside": "Interno della parete",
+          "height": "Altezza",
+          "height.title": "Altezza esterna, fondo e coperchio compresi",
+          "lid": "Coperchio",
+          "thickness": "Spessore del materiale",
+          "finger": "Larghezza delle dita",
+          "finger.title": "Circa questa larghezza; l’app distribuisce un numero pari di dita attorno al contorno",
+          "clearance": "Gioco",
+          "clearance.title": "Gioco totale delle giunzioni a dita e delle code di rondine (negativo = a pressione)",
+          "kerf": "Kerf",
+          "sec.bend": "Piegatura",
+          "hingeKind": "Motivo",
+          "hingeKind.straight": "Tagli dritti",
+          "hingeKind.wave": "Onde",
+          "cutLength": "Lunghezza del taglio",
+          "bridge": "Larghezza del ponte",
+          "bridge.title": "Materiale tra due tagli di una fila",
+          "spacing": "Distanza tra le file",
+          "spacing.title": "Distanza tra le file di tagli; più piccola piega più stretto",
+          "flatRadius": "Piatto oltre il raggio",
+          "flatRadius.title": "Le parti della parete che si piegano meno di questo raggio non ricevono tagli flessibili; lì vanno la giunzione e i collegamenti tra i pezzi",
+          "part.floor": "Fondo",
+          "part.lid": "Coperchio",
+          "part.wall": "Parete",
+          "part.wall1": "Parete 1",
+          "part.wall2": "Parete 2",
+          "part.wall3": "Parete 3",
+          "part.wall4": "Parete 4",
+          "part.wall5": "Parete 5",
+          "part.wall6": "Parete 6",
+          "part.wall7": "Parete 7",
+          "part.wall8": "Parete 8",
+          "info.size": "Dimensioni",
+          "info.strip": "Lunghezza della parete",
+          "info.pieces": "Pezzi della parete",
+          "info.bend": "Piega più stretta all’interno",
+          "info.cuts": "Tagli flessibili",
+          "info.fingers": "Dita",
+          "sel-none": "Seleziona prima un oggetto con un contorno chiuso.",
+          "sel-ok": "Forma presa dalla selezione: {w} × {h} mm.",
+          "contour-none": "Ancora nessuna forma: seleziona un oggetto con un contorno chiuso e premi “Usa selezione”.",
+          "height-small": "La scatola deve essere alta almeno {min} mm per le giunzioni a dita e le code di rondine.",
+          "bend-sharp": "Il contorno si piega troppo stretto per la parete: {r} mm all’interno, almeno {min} mm. Arrotonda prima gli angoli.",
+          "bend-tight": "Piega stretta: {r} mm all’interno. Taglia prima un pezzo di prova; una distanza tra le file minore piega più stretto.",
+          "seam-in-bend": "Nessuna parte piatta è abbastanza lunga per la giunzione: dove le estremità si incontrano, la parete resta dritta per circa {len} mm.",
+          "joint-in-bend": "La parete è divisa per l’area di lavoro e una giunzione si trova in una piega.",
+          "contour": "Forma"
+        }
+      }
+    }
+  ]
+}

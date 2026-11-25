@@ -345,7 +345,7 @@ export interface Host {
    * codes or info texts with their values.
    */
   joints(input: { op: 'panel'; v?: JointVersion; width: number; height: number; thickness: number; finger: number; clearance?: number; kerf?: number; edges: [JointPattern, JointPattern, JointPattern, JointPattern]; corners?: boolean }): { v: JointVersion; outline: SubPath };
-  joints(input: { op: 'edge'; v?: JointVersion; options: JointOptions; parts: Record<string, SubPath[]>; edges: { part: string; sub?: number; seg: number }[] }): JointAnswer;
+  joints(input: { op: 'edge'; v?: JointVersion; options: JointOptions; parts: Record<string, SubPath[]>; edges: { part: string; sub?: number; seg: number; chain?: boolean }[] }): JointAnswer;
   /**
    * The app's living hinge patterns (the Living hinge tool): cuts that fill area (closed sub-paths, holes by even-odd)
    * so the plate bends there, keeping margin from the outline. Answers the cuts as open sub-paths and an info code,
