@@ -2,8 +2,8 @@
   "format": "kizamubeam-pack",
   "formatVersion": 2,
   "id": "org.kizamubeam.rounded-box",
-  "version": "0.1.0",
-  "minApp": "2.9.7",
+  "version": "0.2.0",
+  "minApp": "2.9.8",
   "name": {
     "en": "Rounded box",
     "de": "Box mit runden Kanten",

@@ -1,7 +1,7 @@
 // Rounded box (#513): the parts and their problems from the parameters. The living hinge cuts come from the app
 // (host.hinge), so this file runs in the plugin and, with the host functions of the app, in the Node tests.
-import { host, mm, type HingeInput, type Issue, type Part, type SubPath } from '../../../sdk/ts';
-import { clipCircular, closedRing, dovetail, merge, pieceOutline, ring, slot, stripMap, type V } from './geom';
+import { host, mm, type HingeInput, type Issue, type Part, type Pose, type SubPath } from '../../../sdk/ts';
+import { clipCircular, closedRing, dovetail, merge, pieceOutline, pointAt, ring, slot, stripMap, type V } from './geom';
 
 export interface P {
   [k: string]: number | string | boolean;
@@ -30,7 +30,12 @@ export interface Built {
   /** Strip pieces as [x0, x1] along the strip, and the strip length (for tests) */
   pieces: [number, number][];
   stripLength: number;
+  /** Parts in space for the 3D view and the assembly check: the wall pieces bent along the centre line */
+  poses: Record<string, Pose>;
 }
+
+/** Angle between two points of a bent wall in the 3D view: 1.5° keeps the chords within 0.01 mm of the arc up to r = 100 (tabs in the slots show no false overlap) */
+const POSE_STEP = (1.5 * Math.PI) / 180;
 
 /** Room left at each end of a piece and around the dovetails, beside a tab and as the extension of a bend */
 const GAP = 2;
@@ -39,7 +44,7 @@ export function build(p: P, workArea: { width: number; height: number } | null):
   const t = p.thickness, c = p.clearance, k = p.kerf, w = p.tabWidth, H = p.height;
   const issues: Issue[] = [];
   const parts: Part[] = [];
-  const empty = (): Built => ({ parts, issues, info: [], pieces: [], stripLength: 0 });
+  const empty = (): Built => ({ parts, issues, info: [], pieces: [], stripLength: 0, poses: {} });
   const minR = 1.5 * t;
   if (p.radius < minR) issues.push({ key: 'radius', level: 'error', code: 'radius-small', values: { min: Number(mm(minR)) } });
   const maxR = Math.min(p.width, p.depth) / 2;
@@ -97,6 +102,7 @@ export function build(p: P, workArea: { width: number; height: number } | null):
   const tails = Array.from({ length: tailN }, (_, i) => t + ((H - 2 * t) * (i + 0.5)) / tailN);
 
   const strips: { key: string; subs: SubPath[] }[] = [];
+  const poses: Record<string, Pose> = {};
   const slots: SubPath[] = [];
   let cuts = 0;
   const hingeErr = new Set<string>();
@@ -139,7 +145,9 @@ export function build(p: P, workArea: { width: number; height: number } | null):
     const cx = (x0 + x1) / 2, cy = H / 2;
     const toLocal = (q: V) => ({ x: q[0] - cx, y: q[1] - cy });
     const move = (s: SubPath): SubPath => ({ closed: s.closed, nodes: s.nodes.map((nd) => ({ ...nd, x: nd.x - cx, y: nd.y - cy, ...(nd.cin ? { cin: { x: nd.cin.x - cx, y: nd.cin.y - cy } } : {}), ...(nd.cout ? { cout: { x: nd.cout.x - cx, y: nd.cout.y - cy } } : {}) })) });
-    strips.push({ key: pieces.length > 1 ? `wall${i + 1}` : 'wall', subs: [{ closed: true, nodes: outline.map(toLocal) }, ...cutsHere.map(move)] });
+    const key = pieces.length > 1 ? `wall${i + 1}` : 'wall';
+    strips.push({ key, subs: [{ closed: true, nodes: outline.map(toLocal) }, ...cutsHere.map(move)] });
+    poses[key] = wallPose(x0, x1, cx);
     // Slots for the tabs in floor and lid, at the same places along the centre line
     const half = (w + c - k) / 2;
     for (const xc of tabs) {
@@ -147,6 +155,40 @@ export function build(p: P, workArea: { width: number; height: number } | null):
       slots.push(slot(rg, s - half, s + half, t + c - k));
     }
   });
+  /**
+   * A wall piece standing on the floor, bent along the centre line. Space: the floor seen from above (y of the work
+   * area → −Y), X right, Z up. Local x of the piece is x − cx along the strip, local y runs down from mid height. The
+   * centre line runs anticlockwise seen from above, so n (the path turned to the left) points into the box and the
+   * laser side of the wall faces out (#463).
+   */
+  function wallPose(x0: number, x1: number, cx: number): Pose {
+    const pts: [number, number, number][] = [];
+    // A point at strip position x, moved d outwards from the centre line
+    const add = (x: number, d: number) => {
+      const q = pointAt(rg, map.s(x + seamX), d);
+      pts.push([x, q[0], -q[1]]);
+    };
+    add(x0, 0);
+    add(x1, 0);
+    // Points 1.5° apart in each bend. The 3D view measures the strip along the chords, so the points move out until
+    // each chord is as long as its piece of strip (also with bendExtra): the wall then closes exactly, and the pieces
+    // meet at their joints
+    const R = r - t / 2;
+    for (const [a, b] of bendsAll.map(([u, v]) => [u + t, v - t])) {
+      const lo = Math.max(a, x0), hi = Math.min(b, x1);
+      if (hi <= lo) continue;
+      const steps = Math.max(1, Math.ceil((hi - lo) / (b - a) / (POSE_STEP / (Math.PI / 2)) - 1e-9));
+      const phi = ((Math.PI / 2) * (hi - lo)) / (b - a) / steps;
+      const d = (hi - lo) / steps / (2 * Math.sin(phi / 2)) - R;
+      for (let j = 0; j <= steps; j++) add(lo + ((hi - lo) * j) / steps, d);
+    }
+    const path: [number, number][] = [];
+    for (const [, x, y] of pts.sort((p1, p2) => p1[0] - p2[0])) {
+      const last = path[path.length - 1];
+      if (!last || Math.hypot(x - last[0], y - last[1]) > 1e-6) path.push([x, y]);
+    }
+    return { o: [0, 0, t + H / 2], u: [1, 0, 0], v: [0, 0, -1], n: [0, 1, 0], bend: { path, x0: x0 - cx } };
+  }
   for (const code of hingeErr) issues.push({ level: 'error', code });
   if (issues.some((i) => i.level === 'error')) return empty();
 
@@ -155,6 +197,9 @@ export function build(p: P, workArea: { width: number; height: number } | null):
   parts.push({ key: 'floor', subs: plate(), at: { x: 0, y: 0 } });
   if (p.lid) parts.push({ key: 'lid', subs: plate(), at: { x: 0, y: 0 } });
   for (const s of strips) parts.push({ key: s.key, subs: s.subs, at: { x: 0, y: 0 } });
+  // Floor and lid seen from above like the work area (y → −Y), the wall between them
+  poses.floor = { o: [0, 0, 0], u: [1, 0, 0], v: [0, -1, 0], n: [0, 0, 1] };
+  if (p.lid) poses.lid = { o: [0, 0, t + H], u: [1, 0, 0], v: [0, -1, 0], n: [0, 0, 1] };
   // Arrangement: the app's compact layout
   const at = host.nest({ parts: parts.map((q) => ({ key: q.key, subs: [q.subs[0]] })), gap: 5 }) as [number, number][];
   parts.forEach((q, i) => (q.at = { x: at[i][0], y: at[i][1] }));
@@ -169,5 +214,6 @@ export function build(p: P, workArea: { width: number; height: number } | null):
     ],
     pieces,
     stripLength: L,
+    poses,
   };
 }
