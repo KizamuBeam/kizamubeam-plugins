@@ -77,6 +77,15 @@ export interface Pose {
   u: V3;
   v: V3;
   n: V3;
+  /**
+   * Bent part (a strip with living hinge cuts wrapped around a curve, #513). path: polyline in the plane of u and n,
+   * a point [a, b] means o + a·u + b·n; 2 to 2000 points, consecutive points apart. The middle of the plate (s = th/2,
+   * which keeps its length when the board bends) follows the path; the local x runs along it by arc length (x0 at its
+   * first point, default 0) and n turns with it (the path direction turned by 90° from u towards n).
+   * [[0, th/2], [L, th/2]] is the unbent plate; before the first and after the last point the plate goes on straight.
+   * Apps before 2.9.8 ignore it and show the part unbent.
+   */
+  bend?: { path: [number, number][]; x0?: number };
 }
 /** Answer of onChange: parameters to change as well, or a question (up to three options, each with a patch) */
 export interface Change {

@@ -139,3 +139,54 @@ test('lid, round box, work area and problems', () => {
   assert.deepEqual(codes(box({ radius: 12 })), ['radius-tight']);
   near(box({ bendExtra: 1 }).stripLength - box().stripLength, 4);
 });
+
+test('poses: floor and lid lie flat, the wall follows the centre line round the box (3D view)', () => {
+  const b = box({ lid: true });
+  assert.deepEqual(Object.keys(b.poses).sort(), ['floor', 'lid', 'wall']);
+  assert.deepEqual(b.poses.floor.o, [0, 0, 0]);
+  assert.deepEqual(b.poses.lid.o, [0, 0, 63]);
+  const w = b.poses.wall;
+  assert.deepEqual([w.o, w.u, w.v, w.n], [[0, 0, 33], [1, 0, 0], [0, 0, -1], [0, 1, 0]]);
+  const path = w.bend.path;
+  assert.ok(path.length >= 4 * 30 && path.length <= 2000, `${path.length} points`);
+  // One piece: the path starts and ends at the seam and runs once round; its length is the strip length
+  near(path[0][0], path[path.length - 1][0], 1e-9);
+  near(path[0][1], path[path.length - 1][1], 1e-9);
+  let len = 0;
+  for (let i = 1; i < path.length; i++) len += Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]);
+  // The chords are exactly as long as the strip
+  near(len, b.stripLength, 1e-6);
+  near(w.bend.x0, -b.stripLength / 2, 1e-9);
+  // Every point lies on the centre line (157 × 107, r 33.5), seen from above (y → −Y)
+  const dist = ([x, y]) => Math.hypot(Math.max(Math.abs(x) - 45, 0), Math.max(Math.abs(y) - 20, 0)) - 33.5;
+  // (moved out by a few µm so that the chords keep the strip length)
+  for (const q of path) near(dist(q), 0, 0.01);
+  // Anticlockwise seen from above (positive area), so n turned left from the path points into the box
+  let area = 0;
+  for (let i = 0; i < path.length - 1; i++) area += path[i][0] * path[i + 1][1] - path[i + 1][0] * path[i][1];
+  assert.ok(area > 0);
+});
+
+test('poses: split pieces each get their part of the centre line', () => {
+  const b = box({ width: 400, depth: 300 }, { width: 300, height: 200 });
+  assert.ok(b.pieces.length > 1);
+  b.pieces.forEach(([x0, x1], i) => {
+    const w = b.poses[`wall${i + 1}`];
+    let len = 0;
+    const path = w.bend.path;
+    for (let k = 1; k < path.length; k++) len += Math.hypot(path[k][0] - path[k - 1][0], path[k][1] - path[k - 1][1]);
+    near(len, x1 - x0, 1e-6);
+    near(w.bend.x0, -(x1 - x0) / 2, 1e-9);
+  });
+  // The next piece starts where the last one ended
+  const end = b.poses.wall1.bend.path.at(-1), start = b.poses.wall2.bend.path[0];
+  // With bendExtra the bends sit a little further out (0.3 mm for 0.5 mm extra); the straight sides then reach them at
+  // a slight slant, a few µm longer
+  const e = box({ bendExtra: 0.5 });
+  let el = 0;
+  const ep = e.poses.wall.bend.path;
+  for (let k = 1; k < ep.length; k++) el += Math.hypot(ep[k][0] - ep[k - 1][0], ep[k][1] - ep[k - 1][1]);
+  near(el, e.stripLength, 0.01);
+  near(end[0], start[0], 1e-9);
+  near(end[1], start[1], 1e-9);
+});
