@@ -16,7 +16,7 @@ definePlugin<P>({
   validate: (p) => build(p, area()).issues,
   generate(p) {
     const b = build(p, area());
-    return { parts: b.parts, info: b.info, poses: { poses: b.poses }, distribute: { rotate: true } };
+    return { parts: b.parts, info: b.info, poses: { poses: b.poses }, distribute: { rotate: true }, ...(b.labels ? { labels: b.labels } : {}) };
   },
   onEvent({ action, inputs }) {
     if (action !== 'fromSelection') return null;

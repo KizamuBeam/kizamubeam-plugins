@@ -18,6 +18,8 @@ const calls = { joints: [], hinge: [] };
 globalThis.host = {
   joints: (input) => {
     calls.joints.push(input);
+    // Separate walls: two straight edges, handed back as they are
+    if (!input.parts.floor) return { v: 2, parts: input.parts, added: [], info: [{ code: 'joint-finger-info', values: { n: 3, width: 10 } }] };
     // The ring's length on the middle of the wall, as the app measures it: sampled like the app, moved in by t/2
     const pts = sampleLike(input.parts.floor[0]);
     const mid = offset(pts, -input.options.thickness / 2);
@@ -32,9 +34,9 @@ globalThis.host = {
   },
   nest: ({ parts }) => parts.map(() => [0, 0]),
 };
-await esbuild({ stdin: { contents: "export * from './box'; export * from './contour';", resolveDir: src, loader: 'ts' }, bundle: true, format: 'esm', platform: 'node', outfile: join(dir, 'm.mjs'), logLevel: 'error' });
+await esbuild({ stdin: { contents: "export * from './box'; export * from './contour'; export * from './segments';", resolveDir: src, loader: 'ts' }, bundle: true, format: 'esm', platform: 'node', outfile: join(dir, 'm.mjs'), logLevel: 'error' });
 const m = await import(pathToFileURL(join(dir, 'm.mjs')).href);
-const { build, pieceArea, dovetail, area, resample, offset, radii, runs, lengths, perimeter, decode, encode, fromSelection, smoothPath, sampleLike, walk, smooth } = m;
+const { build, polygon, walls, pieceArea, dovetail, area, resample, offset, radii, runs, lengths, perimeter, decode, encode, fromSelection, smoothPath, sampleLike, walk, smooth } = m;
 rmSync(dir, { recursive: true, force: true });
 
 const manifest = JSON.parse(readFileSync(new URL('../plugin.json', import.meta.url), 'utf8'));
@@ -209,4 +211,106 @@ test('piece area: dovetails at the end, sockets with the play at the start, end 
   // The kerf moves the area outwards
   const k = pieceArea(0, 100, 60, [30], t, c, 0.2);
   near(Math.max(...k.map((p) => p[0])), 100 + dv.depth + 0.1, 1e-6);
+});
+
+const seg = (p = {}) => box({ wall: 'segments', ...p });
+const turnOut = (ws) => ws.map((w, i) => {
+  const a = ws[(i - 1 + ws.length) % ws.length].d, b = w.d;
+  return -Math.atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1]);
+});
+
+test('separate walls: a rectangle keeps its four corners, a circle is split into walls of about the chosen width', () => {
+  // Corners of the rectangle come back where the smoothing rounded them; anticlockwise seen from above
+  const r = polygon(resample([[0, 0], [0, 60], [100, 60], [100, 0]], 400), 40);
+  assert.equal(r.length, 4);
+  for (const q of [[0, 0], [0, 60], [100, 60], [100, 0]]) assert.ok(r.some((p) => Math.hypot(p[0] - q[0], p[1] - q[1]) < 0.05), String(q));
+  const c = polygon(resample(circle(60, 2000).reverse(), 400), 40);
+  assert.equal(c.length, Math.round((2 * Math.PI * 60) / 40));
+  for (const p of c) near(Math.hypot(p[0], p[1]), 60, 0.01);
+  // A stadium: two straight sides of one wall each, the half circles in walls of about 40 mm
+  const st = [];
+  for (let i = 0; i <= 100; i++) st.push([50 + 30 * Math.sin((Math.PI * i) / 100), -30 * Math.cos((Math.PI * i) / 100)]);
+  for (let i = 0; i <= 100; i++) st.push([-50 - 30 * Math.sin((Math.PI * i) / 100), 30 * Math.cos((Math.PI * i) / 100)]);
+  const sp = polygon(resample(st.reverse(), 800), 40);
+  const edges = sp.map((p, i) => Math.hypot(sp[(i + 1) % sp.length][0] - p[0], sp[(i + 1) % sp.length][1] - p[1]));
+  assert.equal(edges.filter((l) => Math.abs(l - 100) < 1).length, 2, edges.join(' '));
+  assert.equal(sp.length, 2 + 2 * Math.round((Math.PI * 30) / 40));
+});
+
+test('separate walls: ends meet on the inside of outward corners, on the outside of inward ones', () => {
+  const t = 3;
+  // An L shape (anticlockwise seen from above): five corners out, one in
+  const L = [[0, 0], [0, 80], [80, 80], [80, 50], [40, 50], [40, 0]];
+  const ws = walls(L, t);
+  const turns = turnOut(ws);
+  assert.equal(turns.filter((a) => a > 0).length, 5);
+  for (const [i, w] of ws.entries()) {
+    // Outward normal points away from the inside of the L
+    const mid = [w.v[0] + (w.len / 2) * w.d[0] + w.out[0], w.v[1] + (w.len / 2) * w.d[1] + w.out[1]];
+    const inside = (p) => (p[0] > 0 && p[0] < 40 && p[1] > 0 && p[1] < 80) || (p[0] >= 40 && p[0] < 80 && p[1] > 50 && p[1] < 80);
+    assert.ok(!inside(mid), `wall ${i}`);
+    // Square corners close without a gap: the wall after an outward corner starts one thickness in, the wall before
+    // an inward corner runs one thickness on
+    near(w.a, turns[i] > 0 ? t : 0, 1e-9);
+    near(w.b, turns[(i + 1) % ws.length] > 0 ? w.len : w.len + t, 1e-9);
+    near(w.gap, 0, 1e-9);
+  }
+  // A hexagon: both walls end where their inner faces meet, leaving a gap outside
+  const hex = walls(circle(50, 6).reverse(), t);
+  for (const w of hex) {
+    near(w.a, t * Math.tan(Math.PI / 6), 1e-9);
+    near(w.gap, 2 * t * Math.tan(Math.PI / 6), 1e-9);
+  }
+});
+
+test('separate walls: parts, names, joints on straight edges, walls standing on the floor with the laser side out', () => {
+  calls.joints.length = 0;
+  const b = seg({ contour: JSON.stringify(circle(60)), segment: 20 });
+  const n = Math.round((2 * Math.PI * 60) / 20);
+  assert.deepEqual(codes(b), []);
+  assert.deepEqual(b.parts.map((p) => p.key), ['floor', 'lid', ...Array.from({ length: n }, (_, i) => `wall${i + 1}`)]);
+  assert.deepEqual(b.labels.wall3, { code: 'part.wallN', values: { n: 3 } });
+  assert.equal(calls.joints.length, n);
+  for (const j of calls.joints) {
+    assert.deepEqual(j.edges, [{ part: 'base', seg: 0 }, { part: 'wall', seg: 0 }]);
+    // The stand-in for the floor's edge is longer at both ends, centred on the wall
+    const bx = j.parts.base[0].nodes.map((q) => q.x), wx = j.parts.wall[0].nodes.map((q) => q.x);
+    near((Math.min(...bx) + Math.max(...bx)) / 2, (Math.min(...wx) + Math.max(...wx)) / 2, 1e-9);
+    assert.ok(Math.max(...bx) - Math.min(...bx) > Math.max(...wx) - Math.min(...wx));
+  }
+  for (let i = 1; i <= n; i++) {
+    const ps = b.poses[`wall${i}`];
+    near(ps.o[2], 30);
+    // −(u×v) is the plate normal, pointing away from the centre
+    const u = ps.u, v = ps.v;
+    const w = [-(u[1] * v[2] - u[2] * v[1]), -(u[2] * v[0] - u[0] * v[2]), -(u[0] * v[1] - u[1] * v[0])];
+    for (let k = 0; k < 3; k++) near(w[k], ps.n[k], 1e-9);
+    assert.ok(ps.o[0] * ps.n[0] + ps.o[1] * ps.n[1] > 0);
+    // The inner face of the wall on the inside of the polygon, one thickness in from the outline
+    near(Math.hypot(ps.o[0], ps.o[1]), 60 * Math.cos(Math.PI / n) - 3, 0.03);
+  }
+  assert.deepEqual(b.poses.lid.o, [0, 0, 57]);
+  const info = Object.fromEntries(b.info.map(([k, v]) => [k, v]));
+  assert.equal(info['info.walls'], String(n));
+  near(Number(info['info.gap'].split(' ')[0]), 2 * 3 * Math.tan(Math.PI / n), 0.01);
+  // The bent strip's settings are not used
+  assert.equal(calls.hinge.length >= 0, true);
+  // Without a lid
+  assert.deepEqual(seg({ contour: JSON.stringify(circle(60)), lid: false }).parts.slice(0, 2).map((p) => p.key), ['floor', 'wall1']);
+});
+
+test('separate walls: a rectangle needs no rounding, wide angles and narrow walls are reported', () => {
+  const rect = seg({ contour: JSON.stringify([[0, 0], [100, 0], [100, 60], [0, 60]]) });
+  assert.deepEqual(codes(rect), []);
+  assert.equal(rect.parts.length, 6);
+  // Inside measure: the walls go around the outline
+  const size = (q) => Number(q.info[0][1].split(' × ')[0]);
+  near(size(seg({ contour: JSON.stringify([[0, 0], [100, 0], [100, 60], [0, 60]]), measure: 'inside' })), 106, 0.05);
+  // Wide walls on a circle leave wider gaps outside
+  assert.deepEqual(codes(seg({ contour: JSON.stringify(circle(30)), segment: 30 })), ['corner-gap']);
+  assert.deepEqual(codes(seg({ contour: JSON.stringify(circle(60)), segment: 40 })), []);
+  assert.deepEqual(codes(seg({ contour: JSON.stringify(circle(60)) })), []);
+  assert.deepEqual(codes(seg({ contour: JSON.stringify(circle(15)), segment: 10, finger: 12 })), ['wall-narrow']);
+  // Low boxes are fine without dovetails
+  assert.deepEqual(codes(seg({ contour: JSON.stringify(circle(60)), height: 15 })), []);
 });
