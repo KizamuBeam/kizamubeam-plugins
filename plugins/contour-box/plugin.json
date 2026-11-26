@@ -2,7 +2,7 @@
   "format": "kizamubeam-pack",
   "formatVersion": 2,
   "id": "org.kizamubeam.contour-box",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minApp": "2.9.10",
   "name": {
     "en": "Box from contour",
@@ -10,9 +10,9 @@
     "it": "Scatola da contorno"
   },
   "description": {
-    "en": "Box in any smooth shape from the selection, with a bent wall strip, living hinge cuts and finger joints.",
-    "de": "Kasten in beliebiger runder Form aus der Auswahl, mit gebogenem Wandstreifen, Biegeschnitten und Fingerzinken.",
-    "it": "Scatola di qualsiasi forma arrotondata dalla selezione, con striscia piegata, tagli flessibili e giunzioni a dita."
+    "en": "Box in any shape from the selection: a bent wall strip with living hinge cuts or separate flat walls, joined with finger joints.",
+    "de": "Kasten in beliebiger Form aus der Auswahl: gebogener Wandstreifen mit Biegeschnitten oder einzelne flache Wände, verbunden mit Fingerzinken.",
+    "it": "Scatola di qualsiasi forma dalla selezione: striscia piegata con tagli flessibili o pareti piatte separate, unite con giunzioni a dita."
   },
   "author": "KizamuBeam",
   "homepage": "https://github.com/KizamuBeam/kizamubeam-plugins/tree/main/plugins/contour-box",
@@ -73,6 +73,34 @@
           "key": "contour",
           "type": "data",
           "def": "[[-31.98,49.18],[-34.97,49.64],[-37.97,49.91],[-40.99,50.0],[-44.01,49.91],[-47.02,49.63],[-50.0,49.18],[-52.96,48.54],[-55.87,47.73],[-58.72,46.75],[-61.51,45.59],[-64.22,44.27],[-66.86,42.79],[-69.39,41.15],[-71.82,39.36],[-74.14,37.42],[-76.34,35.35],[-78.41,33.15],[-80.34,30.83],[-82.13,28.4],[-83.77,25.86],[-85.26,23.23],[-86.58,20.52],[-87.73,17.73],[-88.72,14.87],[-89.53,11.96],[-90.16,9.01],[-90.62,6.03],[-90.89,3.02],[-90.98,0.0],[-90.89,-3.02],[-90.62,-6.03],[-90.16,-9.01],[-89.53,-11.96],[-88.72,-14.87],[-87.73,-17.73],[-86.58,-20.52],[-85.26,-23.23],[-83.77,-25.86],[-82.13,-28.4],[-80.34,-30.83],[-78.41,-33.15],[-76.34,-35.35],[-74.14,-37.42],[-71.82,-39.36],[-69.39,-41.15],[-66.86,-42.79],[-64.22,-44.27],[-61.51,-45.59],[-58.72,-46.75],[-55.87,-47.73],[-52.96,-48.54],[-50.0,-49.18],[-47.02,-49.63],[-44.01,-49.91],[-40.99,-50.0],[-37.97,-49.91],[-34.97,-49.64],[-31.98,-49.18],[-28.96,-48.63],[-25.93,-48.08],[-22.91,-47.52],[-19.89,-46.97],[-16.86,-46.42],[-13.84,-45.86],[-10.82,-45.31],[-7.79,-44.76],[-4.77,-44.2],[-1.74,-43.65],[1.28,-43.1],[4.3,-42.54],[7.33,-41.99],[10.35,-41.44],[13.37,-40.88],[16.4,-40.33],[19.42,-39.78],[22.45,-39.22],[25.47,-38.67],[28.49,-38.12],[31.52,-37.56],[34.54,-37.01],[37.56,-36.46],[40.59,-35.9],[43.61,-35.35],[46.64,-34.8],[49.66,-34.24],[52.68,-33.69],[55.71,-33.14],[58.73,-32.58],[61.75,-32.03],[64.78,-31.48],[67.76,-30.78],[70.67,-29.8],[73.47,-28.55],[76.13,-27.04],[78.64,-25.28],[80.97,-23.28],[83.1,-21.07],[85.01,-18.67],[86.67,-16.1],[88.09,-13.38],[89.23,-10.53],[90.1,-7.59],[90.69,-4.58],[90.98,-1.53],[90.98,1.53],[90.69,4.58],[90.1,7.59],[89.23,10.53],[88.09,13.38],[86.67,16.1],[85.01,18.67],[83.1,21.07],[80.97,23.28],[78.64,25.28],[76.13,27.04],[73.47,28.55],[70.67,29.8],[67.76,30.78],[64.78,31.48],[61.75,32.03],[58.73,32.58],[55.71,33.14],[52.68,33.69],[49.66,34.24],[46.64,34.8],[43.61,35.35],[40.59,35.9],[37.56,36.46],[34.54,37.01],[31.52,37.56],[28.49,38.12],[25.47,38.67],[22.45,39.22],[19.42,39.78],[16.4,40.33],[13.37,40.88],[10.35,41.44],[7.33,41.99],[4.3,42.54],[1.28,43.1],[-1.74,43.65],[-4.77,44.2],[-7.79,44.76],[-10.82,45.31],[-13.84,45.86],[-16.86,46.42],[-19.89,46.97],[-22.91,47.52],[-25.93,48.08],[-28.96,48.63]]"
+        },
+        {
+          "key": "wall",
+          "type": "enum",
+          "options": [
+            [
+              "bent",
+              "wall.bent"
+            ],
+            [
+              "segments",
+              "wall.segments"
+            ]
+          ],
+          "def": "bent"
+        },
+        {
+          "key": "segment",
+          "type": "length",
+          "min": 10,
+          "max": 1000,
+          "def": 25,
+          "showIf": {
+            "eq": [
+              "wall",
+              "segments"
+            ]
+          }
         },
         {
           "key": "measure",
@@ -143,7 +171,13 @@
             ]
           ],
           "def": "straight",
-          "section": "sec.bend"
+          "section": "sec.bend",
+          "showIf": {
+            "eq": [
+              "wall",
+              "bent"
+            ]
+          }
         },
         {
           "key": "cutLength",
@@ -151,7 +185,13 @@
           "min": 2,
           "max": 500,
           "def": 18,
-          "section": "sec.bend"
+          "section": "sec.bend",
+          "showIf": {
+            "eq": [
+              "wall",
+              "bent"
+            ]
+          }
         },
         {
           "key": "bridge",
@@ -159,7 +199,13 @@
           "min": 0.3,
           "max": 50,
           "def": 3,
-          "section": "sec.bend"
+          "section": "sec.bend",
+          "showIf": {
+            "eq": [
+              "wall",
+              "bent"
+            ]
+          }
         },
         {
           "key": "spacing",
@@ -167,7 +213,13 @@
           "min": 0.3,
           "max": 20,
           "def": 1.5,
-          "section": "sec.bend"
+          "section": "sec.bend",
+          "showIf": {
+            "eq": [
+              "wall",
+              "bent"
+            ]
+          }
         },
         {
           "key": "flatRadius",
@@ -176,14 +228,20 @@
           "max": 100000,
           "def": 300,
           "section": "sec.bend",
-          "advanced": true
+          "advanced": true,
+          "showIf": {
+            "eq": [
+              "wall",
+              "bent"
+            ]
+          }
         }
       ],
       "texts": {
         "en": {
           "name": "Box from contour",
-          "desc": "Box in any smooth shape from the selection: floor and lid follow the outline, the wall is one strip with living hinge cuts where it bends, joined with finger joints.",
-          "keys": "box contour shape outline round curved bent wall living hinge flex finger joints selection",
+          "desc": "Box in any shape from the selection: floor and lid follow the outline, the wall is one strip with living hinge cuts where it bends or a row of separate flat walls, joined with finger joints.",
+          "keys": "box contour shape outline round curved bent wall living hinge flex finger joints selection segments flat walls polygon",
           "label": "Box from contour, {height} high",
           "fromSelection": "Use selection",
           "fromSelection.title": "Take the largest closed outline of the selected objects as the shape of the box",
@@ -236,12 +294,24 @@
           "bend-tight": "Tight bend: {r} mm inside. Cut a test piece first; a smaller row spacing bends tighter.",
           "seam-in-bend": "No flat part is long enough for the seam: where the ends meet, the wall stays straight for about {len} mm.",
           "joint-in-bend": "The wall is split for the work area and a joint lies in a bend.",
-          "contour": "Shape"
+          "contour": "Shape",
+          "wall": "Wall",
+          "wall.title": "One strip bent around the shape, or separate flat walls along it",
+          "wall.bent": "Bent strip",
+          "wall.segments": "Separate walls",
+          "segment": "Wall width",
+          "segment.title": "About this wide where the outline curves; straight parts and corners of the shape stay as they are",
+          "part.wallN": "Wall {n}",
+          "info.walls": "Walls",
+          "info.widths": "Wall widths",
+          "info.gap": "Gap at the corners outside",
+          "wall-narrow": "A wall would be only {w} mm wide, at least {min} mm: make the walls wider or the shape larger.",
+          "corner-gap": "The walls meet at wide angles: gaps up to {g} mm stay open outside the corners. Narrower walls make them smaller."
         },
         "de": {
           "name": "Box aus Kontur",
-          "desc": "Kasten in beliebiger runder Form aus der Auswahl: Boden und Deckel folgen der Kontur, die Wand ist ein Streifen mit Biegeschnitten in den Biegungen, verbunden mit Fingerzinken.",
-          "keys": "box kasten kontur form umriss rund gebogen wand biegeschnitt living hinge flex fingerzinken auswahl",
+          "desc": "Kasten in beliebiger Form aus der Auswahl: Boden und Deckel folgen der Kontur, die Wand ist ein Streifen mit Biegeschnitten in den Biegungen oder eine Reihe einzelner flacher Wände, verbunden mit Fingerzinken.",
+          "keys": "box kasten kontur form umriss rund gebogen wand biegeschnitt living hinge flex fingerzinken auswahl segmente flache wände vieleck",
           "label": "Box aus Kontur, {height} hoch",
           "fromSelection": "Auswahl übernehmen",
           "fromSelection.title": "Die größte geschlossene Kontur der gewählten Objekte wird die Form des Kastens",
@@ -294,12 +364,24 @@
           "bend-tight": "Enge Biegung: innen {r} mm. Erst ein Probestück schneiden; ein kleinerer Reihenabstand biegt enger.",
           "seam-in-bend": "Kein flacher Teil ist lang genug für den Stoß: wo die Enden zusammentreffen, bleibt die Wand auf etwa {len} mm gerade.",
           "joint-in-bend": "Die Wand ist für die Arbeitsfläche geteilt, und eine Verbindung liegt in einer Biegung.",
-          "contour": "Form"
+          "contour": "Form",
+          "wall": "Wand",
+          "wall.title": "Ein Streifen um die Form gebogen oder einzelne flache Wände entlang der Form",
+          "wall.bent": "Gebogener Streifen",
+          "wall.segments": "Einzelne Wände",
+          "segment": "Wandbreite",
+          "segment.title": "Ungefähr so breit, wo die Kontur gebogen ist; gerade Teile und Ecken der Form bleiben, wie sie sind",
+          "part.wallN": "Wand {n}",
+          "info.walls": "Wände",
+          "info.widths": "Wandbreiten",
+          "info.gap": "Fuge außen an den Ecken",
+          "wall-narrow": "Eine Wand wäre nur {w} mm breit, mindestens {min} mm: die Wände breiter oder die Form größer machen.",
+          "corner-gap": "Die Wände stoßen in großen Winkeln aneinander: außen an den Ecken bleiben Fugen bis {g} mm. Schmalere Wände machen sie kleiner."
         },
         "it": {
           "name": "Scatola da contorno",
-          "desc": "Scatola di qualsiasi forma arrotondata dalla selezione: fondo e coperchio seguono il contorno, la parete è una striscia con tagli flessibili dove si piega, unita con giunzioni a dita.",
-          "keys": "scatola contorno forma rotonda curva parete cerniera flessibile living hinge giunzioni a dita selezione",
+          "desc": "Scatola di qualsiasi forma dalla selezione: fondo e coperchio seguono il contorno, la parete è una striscia con tagli flessibili dove si piega o una serie di pareti piatte separate, unite con giunzioni a dita.",
+          "keys": "scatola contorno forma rotonda curva parete cerniera flessibile living hinge giunzioni a dita selezione segmenti pareti piatte poligono",
           "label": "Scatola da contorno, alta {height}",
           "fromSelection": "Usa selezione",
           "fromSelection.title": "Il contorno chiuso più grande degli oggetti selezionati diventa la forma della scatola",
@@ -352,7 +434,19 @@
           "bend-tight": "Piega stretta: {r} mm all’interno. Taglia prima un pezzo di prova; una distanza tra le file minore piega più stretto.",
           "seam-in-bend": "Nessuna parte piatta è abbastanza lunga per la giunzione: dove le estremità si incontrano, la parete resta dritta per circa {len} mm.",
           "joint-in-bend": "La parete è divisa per l’area di lavoro e una giunzione si trova in una piega.",
-          "contour": "Forma"
+          "contour": "Forma",
+          "wall": "Parete",
+          "wall.title": "Una striscia piegata attorno alla forma, o pareti piatte separate lungo di essa",
+          "wall.bent": "Striscia piegata",
+          "wall.segments": "Pareti separate",
+          "segment": "Larghezza delle pareti",
+          "segment.title": "Circa questa larghezza dove il contorno è curvo; le parti dritte e gli angoli della forma restano come sono",
+          "part.wallN": "Parete {n}",
+          "info.walls": "Pareti",
+          "info.widths": "Larghezze delle pareti",
+          "info.gap": "Fessura esterna agli angoli",
+          "wall-narrow": "Una parete sarebbe larga solo {w} mm, almeno {min} mm: rendi le pareti più larghe o la forma più grande.",
+          "corner-gap": "Le pareti si incontrano ad angoli ampi: all’esterno degli angoli restano fessure fino a {g} mm. Pareti più strette le riducono."
         }
       }
     }

@@ -3,11 +3,14 @@
 // (host.joints with chain: true measures them on the middle of the wall), the strip ends meet with dovetails, and a
 // strip longer than the work area is split into pieces that join the same way.
 import { host, mm, type HingeInput, type Issue, type Part, type Pose, type SubPath, type Text } from '../../../sdk/ts';
+import { buildSegments } from './segments';
 import { area, decode, lengths, offset, perimeter, radii, resample, runs, sampleLike, smooth, smoothPath, walk, type V } from './contour';
 
 export interface P {
   [k: string]: number | string | boolean;
   contour: string;
+  wall: string;
+  segment: number;
   measure: string;
   height: number;
   lid: boolean;
@@ -31,6 +34,8 @@ export interface Built {
   stripLength: number;
   bends: [number, number][];
   poses: Record<string, Pose>;
+  /** Names of the parts by key (separate walls only) */
+  labels?: Record<string, Text>;
 }
 
 /** Room left at each end of a piece, beside the dovetails and before the end of a bend */
@@ -118,7 +123,9 @@ export function build(p: P, workArea: { width: number; height: number } | null):
   const dv = dovetail(t);
   const raw = decode(p.contour);
   if (!raw) issues.push({ level: 'error', code: 'contour-none' });
-  const minH = dv.head + 2 + 2 * t;
+  const segs = p.wall === 'segments';
+  // Room for the dovetails between strip pieces; separate walls need only their finger joints
+  const minH = segs ? 2 * t + 3 : dv.head + 2 + 2 * t;
   if (H < minH) issues.push({ key: 'height', level: 'error', code: 'height-small', values: { min: Number(mm(minH)) } });
   if (!raw || issues.some((i) => i.level === 'error')) return empty();
 
@@ -129,6 +136,10 @@ export function build(p: P, workArea: { width: number; height: number } | null):
   const per = perimeter(pts);
   pts = smooth(resample(pts, Math.max(64, Math.min(8000, Math.round(per / 0.25)))), Math.max(1, Math.round(1 / Math.max(0.25, per / 8000))));
   pts = resample(pts, Math.max(48, Math.min(1500, Math.round(perimeter(pts) / 1.5))));
+  if (segs) {
+    const sb = buildSegments(p, pts);
+    return { parts: sb.parts, issues: sb.issues, info: sb.info, pieces: [], stripLength: 0, bends: [], poses: sb.poses, labels: sb.labels };
+  }
   // Outside of the wall, and the middle of the wall (the layer that keeps its length when the board bends)
   const outer = p.measure === 'inside' ? offset(pts, t) : pts;
   const mid0 = offset(outer, -t / 2);
